@@ -14,12 +14,12 @@
 
 
 #define STEPS_PER_ROTATION 200
-#define MIN_RUN_MODE 0 // All 4 run modes: 
-#define MAX_RUN_MODE 3 // 0-FW, 1-BW, 2-FW-PS, 3-FW-PS-BW
+#define MIN_RUN_MODE 0 // 2 tackt run mode 
+#define MAX_RUN_MODE 1 // 4 tackt run mode
 #define MAX_MOTOR_SPEED 1000 // Maximum speed, steps/s
 #define MIN_MOTOR_SPEED 100 // Minimum speed, steps/s
-#define MAX_MOTOR_FEED 2000 // Maximum feed, steps
-#define MIN_MOTOR_FEED 20 // Minimum feed, steps
+#define MAX_ACCEL_TIME 5 // Maximum time for acceleration, s
+#define MIN_ACCEL_TIME 1 // Minimum time for acceleration, s
 #define MAX_FW_TIME 8 // Maximum forward feed time, s
 #define MIN_FW_TIME 0 // Minimum forward feed time, s
 #define MAX_BW_TIME 8 // Maximum backward feed time, s
@@ -30,7 +30,7 @@
 // Define a stepper and the pins it will use
 AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
 
-// Fefine an lcd screen
+// Define an LCD screen
 rgb_lcd lcd;
 
 const int colorR = 100;
@@ -41,13 +41,15 @@ const int buttonPinA = 6;
 const int buttonPinB = 7;
 const int buttonPinC = 8;
 const int buttonPinD = 9;
-
+const int buttonPinS = 10;
+const int buttonPinP = 11;
 
 
 #define ST_SELECT 1
 #define ST_ONRUN 0
 
 // Types of modes (can be added more combinations)
+/*
 enum run_mode
 {
   rm_FWD, // Forward
@@ -56,6 +58,7 @@ enum run_mode
   rm_FPB, // Forward-Pause-Backward
   RUN_MODES_NUM
 };
+*/
 // Types of actione within any mode
 enum act_type
 {
@@ -70,20 +73,45 @@ enum button
   bt_B,
   bt_C,
   bt_D,
+  bt_S,
+  bt_P
+};
+enum start_mode
+{
+  st_2T,
+  st_4T,
+};
+
+enum param_id
+{
+  par_speed,
+  par_fwtime,
+  par_pause,
+  par_bwtime,
+  par_accel,
+  par_stmode 
 };
 
 typedef struct params
 {
   float value;
   float inc;
-  int disp;
   int max;
   int min;
-  char name[5];
+  byte id;
+  char name[8];
 } Param;
 #define NUM_PARAM 6
 int selected_param = 0;
 Param param[NUM_PARAM];
+const Param* GetParam(byte id)
+{
+  for(byte i=0; i<NUM_PARAM; i++)
+  {
+    if( param[i].id == id )
+    return &param[i];
+  }
+}
 
 // Action types with their timing parameters
 class Action
@@ -93,8 +121,8 @@ class Action
   byte act_type;
   long time_period; // ms
   bool dir_CW;
-  bool is_newaction;
-  void Reset(){is_newaction=true;}
+//  bool is_newaction;
+//  void Reset(){is_newaction=true;}
 //  void (*func)();
 };
 
@@ -112,6 +140,7 @@ public:
   void AddAction(Action* p);
   Action* GetAction();
   void NextAction(); // Call to change for a next Action
+  int GetActionsNumber();
   void Reset(); // Set indexes to 0
 protected:
   Action* list[8]; // Action pointers container
@@ -124,26 +153,25 @@ void Mode::AddAction(Action* p)
   curr++;
   N++;
 }
-Action* Mode::GetAction()
-{
-  return list[curr];
-}
-void Mode::NextAction()
-{
+Action* Mode::GetAction(){
+  return list[curr];}
+  
+int Mode::GetActionsNumber(){
+  return N;}
+  
+void Mode::NextAction(){
   curr++;
   if(curr == N)
     curr = 0;
-  list[curr]->Reset();
+  //list[curr]->Reset();
 }
-void Mode::Reset()
-{
-  for(curr=0; curr<N; curr++)
-    list[curr]->Reset();
+void Mode::Reset(){
+//  for(curr=0; curr<N; curr++)
+//    list[curr]->Reset();
   curr = 0;
 }
   
-byte g_mode = 0; // Global index of current Mode
-Mode run_mode_list[RUN_MODES_NUM]; // Global list of available Modes
+Mode g_mode; // Global mode
 
 // Global updatable variables
 float _MotorSpeed; // steping motor speed, steps/sec
@@ -152,15 +180,20 @@ float _FeedSteps = 400; // number of steps for a single feed loop, steps
 //bool _MotorDirCW;
 
 float _Pos=0; // Current position of motor, steps
-//bool new_loop;
 
 bool state = ST_SELECT;
 bool update_display = true;
 volatile bool timer_flag = false;
 bool reset_timer = true;
+bool is_newaction = true;
+
+byte start_mode = 0;
 
 // When Timer is over, rise a flag
 void timerIsr(){
+Serial.print("ISR");
+Serial.println("");
+
   timer_flag = true; }
 
 void setup()
@@ -173,105 +206,114 @@ void setup()
   pinMode(buttonPinB, INPUT_PULLUP);
   pinMode(buttonPinC, INPUT_PULLUP);
   pinMode(buttonPinD, INPUT_PULLUP);
+  pinMode(buttonPinS, INPUT_PULLUP);
+
 
   lcd.begin(16, 2);    
   lcd.setRGB(colorR, colorG, colorB);
 
 // Initial action parameters
   fw_feed.time_period = 1000; // ms
-  fw_feed.Reset();
   bw_feed.time_period = 1000; // ms
-  bw_feed.Reset();
   ps_feed.time_period = 0; // ms
-  ps_feed.Reset();
-
 
   // Setting parameters for display
-  strcpy( param[0].name, "Mode");
-  param[0].value = 0; // First mode
-  param[0].min = MIN_RUN_MODE;
-  param[0].max = MAX_RUN_MODE;
-  param[0].inc = 1;
   
-  strcpy( param[1].name, "Speed");
-  param[1].value = MAX_MOTOR_SPEED;
-  param[1].min = MIN_MOTOR_SPEED;
-  param[1].max = MAX_MOTOR_SPEED;
-  param[1].inc = 1;
+  strcpy( param[par_speed].name, "Speed");
+  param[par_speed].id = par_speed;
+  param[par_speed].value = MAX_MOTOR_SPEED;
+  param[par_speed].min = MIN_MOTOR_SPEED;
+  param[par_speed].max = MAX_MOTOR_SPEED;
+  param[par_speed].inc = 1;
   
-  strcpy( param[2].name, "Feed");
-  param[2].value = MIN_MOTOR_FEED;
-  param[2].max = MAX_MOTOR_FEED;
-  param[2].min = MIN_MOTOR_FEED;
-  param[2].inc = 1;
-
-  strcpy( param[3].name, "FWtim");
-  param[3].value = (float)fw_feed.time_period / 1000;
-  param[3].max = MAX_FW_TIME;
-  param[3].min = MIN_FW_TIME;
-  param[3].inc = 0.1;
-
-  strcpy( param[4].name, "BWtim");
-  param[4].value = (float)bw_feed.time_period / 1000;
-  param[4].max = MAX_BW_TIME;
-  param[4].min = MIN_BW_TIME;
-  param[4].inc = 0.1;
+  strcpy( param[par_fwtime].name, "FW time");
+  param[par_fwtime].id = par_fwtime;
+  param[par_fwtime].value = (float)fw_feed.time_period / 1000;
+  param[par_fwtime].max = MAX_FW_TIME;
+  param[par_fwtime].min = MIN_FW_TIME;
+  param[par_fwtime].inc = 0.1;
  
-  strcpy( param[5].name, "Pause");
-  param[5].value = (float)ps_feed.time_period / 1000;
-  param[5].max = MAX_PAUSE;
-  param[5].min = MIN_PAUSE;
-  param[5].inc = 0.1;
+  strcpy( param[par_pause].name, "Pause");
+  param[par_pause].id = par_pause;
+  param[par_pause].value = (float)ps_feed.time_period / 1000;
+  param[par_pause].max = MAX_PAUSE;
+  param[par_pause].min = MIN_PAUSE;
+  param[par_pause].inc = 0.1;
+
+  strcpy( param[par_bwtime].name, "BW time");
+  param[par_bwtime].id = par_bwtime;
+  param[par_bwtime].value = (float)bw_feed.time_period / 1000;
+  param[par_bwtime].max = MAX_BW_TIME;
+  param[par_bwtime].min = MIN_BW_TIME;
+  param[par_bwtime].inc = 0.1;
+
+  strcpy( param[par_accel].name, "Accel");
+  param[par_accel].id = par_accel;  
+  param[par_accel].value = MIN_ACCEL_TIME;
+  param[par_accel].max = MAX_ACCEL_TIME;
+  param[par_accel].min = MIN_ACCEL_TIME;
+  param[par_accel].inc = 1;
+
+  strcpy( param[par_stmode].name, "Mode");
+  param[par_stmode].value = MIN_RUN_MODE; // First mode
+  param[par_stmode].id = par_stmode;
+  param[par_stmode].min = MIN_RUN_MODE;
+  param[par_stmode].max = MAX_RUN_MODE;
+  param[par_stmode].inc = 1;
+
 
   
-  stepper.setMaxSpeed(param[1].value); // bad, absolute index
-  stepper.setSpeed(param[1].value); // bad, absolute index
+  stepper.setMaxSpeed(param[par_speed].value); 
+  stepper.setSpeed(param[par_speed].value); 
   update_display = true;
 
  
   //_MotorDirCW = true;
   // Initializing Timer1 and assigning ISR handler
   Timer1.initialize(1000000); 
-  Timer1.attachInterrupt( timerIsr );
   Timer1.stop();
+  Timer1.attachInterrupt( timerIsr );
+  //Timer1.start();
+  
 
-// Populating run modes with actions
-// Mode FWD:
-  run_mode_list[rm_FWD].AddAction(&fw_feed);
-  run_mode_list[rm_FWD].Reset();
-// Mode BKD:
-  run_mode_list[rm_BKW].AddAction(&bw_feed);
-  run_mode_list[rm_BKW].Reset();
-// Mode FWP:
-  run_mode_list[rm_FWP].AddAction(&fw_feed);
-  run_mode_list[rm_FWP].AddAction(&ps_feed);
-  run_mode_list[rm_FWP].Reset();
-// Mode FPB:
-  run_mode_list[rm_FPB].AddAction(&fw_feed);
-  run_mode_list[rm_FPB].AddAction(&ps_feed);
-  run_mode_list[rm_FPB].AddAction(&bw_feed);
-  run_mode_list[rm_FPB].Reset();
+// Populating run mode with actions (in order of appearance in the cycle)
+  g_mode.AddAction(&fw_feed);
+  g_mode.AddAction(&ps_feed);
+  g_mode.AddAction(&bw_feed);
+
+  UpdateGlobalSettings();
 }
 
 // Call this funciton when changed some settings using buttons
 // Parameters are copied to global settings
 void UpdateGlobalSettings()
 {
+
     // Updating selected values - // bad pactice, absolute index,  but will change later
-    g_mode = (byte)param[0].value; // Set curren tmode
-    _MotorSpeed = param[1].value;
-    _MotorAccel = _MotorSpeed - _MotorSpeed / 16; // Setting acceleration speed 6.25% slower than current motor speed
-    _FeedSteps = param[2].value;
+    start_mode = (byte)param[par_stmode].value; // Set current mode
+    _MotorSpeed = param[par_speed].value;
+    _MotorAccel = param[par_accel].value;
+  
 
-    fw_feed.time_period = param[3].value * 1000; // Convert FP sec into ms
-    bw_feed.time_period = param[4].value * 1000;
-    ps_feed.time_period = param[5].value * 1000;
+    fw_feed.time_period = param[par_fwtime].value * 1000; // Convert FP sec into ms
+    bw_feed.time_period = param[par_bwtime].value * 1000;
+    ps_feed.time_period = param[par_pause].value * 1000;
 
-    run_mode_list[g_mode].Reset();
+    g_mode.Reset();
 
 Serial.print("UpdateGlobalSettings");
 Serial.println("");
 
+}
+
+// Call this function once when starting a cycle
+void UpdateStartSettings()
+{
+  Timer1.stop(); // Need to stop timer as it might continue counting from previous cycle 
+  timer_flag = false;
+  reset_timer = true; // Flag to reset timer when startina a cycle
+  is_newaction = true;
+  g_mode.Reset(); // Make Actions in order for a new cycle
 }
 
 
@@ -279,12 +321,9 @@ void MotorTest()
 {
 //Serial.print(_MotorSpeed);
 //Serial.println("");
-
-  stepper.runSpeed();
+  if(state == ST_ONRUN)
+    stepper.runSpeed();
 }
-
-byte act_type = ac_FW;
-bool is_newaction = true;
 
 
 void Run_Modes()
@@ -292,19 +331,23 @@ void Run_Modes()
   if(state == ST_ONRUN)
   {
     // Get the ongoing action from the current mode
-    Mode* mode = &run_mode_list[g_mode];  
-    Action* ac = mode->GetAction();
+    Action* ac = g_mode.GetAction();
+    byte act_type = ac->act_type;
+
     switch(act_type)
     {
       case ac_FW:
         // Action: FW Feed
           if(is_newaction){
-            long timer = fw_feed.time_period;
+Serial.print("FW new action");
+Serial.println("");
+
+            long timer = ac->time_period;
             if(timer == 0)
             {
               // Set next action and break
               // No need to stop timer, reset action - it's done in previous action
-              act_type = ac_PS;
+              g_mode.NextAction();
               break;
             }            
             is_newaction = false;
@@ -314,8 +357,13 @@ void Run_Modes()
             {
               // Set up the timer
               //long timer = fw_feed.time_period * 1000;
+              TCNT1 = 1;
               Timer1.setPeriod(timer * 1000);
-              //Timer1.start();
+  noInterrupts();
+  timer_flag = false;
+  interrupts();
+ 
+              Timer1.resume();
 Serial.print("FW Timer start ");
 Serial.print(timer);
 Serial.println("");
@@ -324,7 +372,10 @@ Serial.println("");
           }
           if (timer_flag != true){ // Timer is not finished
             //ac->Func(); //Motor step FW //////////////
-            stepper.runSpeed();            
+            stepper.runSpeed();
+        //Serial.print(stepper.speed());
+        //Serial.println("");
+            
             }
           else
           { // Action time is over
@@ -336,21 +387,20 @@ Serial.print("FW Timer stop");
 Serial.println("");
 
             // Toggle next action in the current mode
-            act_type = ac_PS;
+            g_mode.NextAction();
             is_newaction = true;
           }
         break;
 ///////////////////////////////////////////////////////////////////////////////
       case ac_PS:
         // Action: PS Feed
-        //if(!is_finished){
           if(is_newaction){
-            long timer = ps_feed.time_period;
+            long timer = ac->time_period;
             if(timer == 0)
             {
               // Set next action and break
               // No need to stop timer, reset action - it's done in previous action
-              act_type = ac_BW;
+              g_mode.NextAction();
               break;
             }            
             is_newaction = false;
@@ -360,6 +410,7 @@ Serial.println("");
             {
               // Set up the timer
               //long timer = ps_feed.time_period * 1000;
+              TCNT1 = 1;
               Timer1.setPeriod(timer * 1000);
               //Timer1.start();
               
@@ -382,23 +433,21 @@ Serial.print("PS Timer stop");
 Serial.println("");
 
             // Toggle next action in the current mode
-            act_type = ac_BW; 
+            g_mode.NextAction(); 
             is_newaction = true;
           }
-        //}
         break;
 
 ///////////////////////////////////////////////////////////////////////////////      
       case ac_BW:
         // Action: BW Feed
-        //if(!is_finished){
           if(is_newaction){
-            long timer = bw_feed.time_period;
+            long timer = ac->time_period;
             if(timer == 0)
             {
               // Set next action and break
               // No need to stop timer, reset action - it's done in previous action
-              act_type = ac_FW;
+              g_mode.NextAction();
               break;
             }            
             is_newaction = false;
@@ -408,6 +457,7 @@ Serial.println("");
             {
               // Set up the timer
               //long timer = bw_feed.time_period * 1000;
+              TCNT1 = 1;
               Timer1.setPeriod(timer * 1000);
               //Timer1.start();
               
@@ -418,11 +468,13 @@ Serial.println("");
           }
           if (timer_flag != true){ // Timer is not finished
             //ac->Func(); //Motor step FW ///////////////////////////////////////////
-//Serial.print("BW Speed: ");
-//Serial.print(stepper.speed());
+//Serial.print("BW");
 //Serial.println("");
 
             stepper.runSpeed();
+        //Serial.print(stepper.speed());
+        //Serial.println("");
+
           }
           else
           { // Action time is over
@@ -434,10 +486,9 @@ Serial.print("BW Timer stop");
 Serial.println("");
 
             // Toggle next action in the current mode
-            act_type = ac_FW; 
+            g_mode.NextAction(); 
             is_newaction = true;
           }
-        //}
         break;
 /////////////////////////////////////////////////////////////////////////////////////////
 
@@ -549,13 +600,13 @@ void UpdateMotor()
 */
 void UpdateMotorSpeed(bool isCW)
 {
-Serial.print(isCW);
-Serial.println("");
-
   if(isCW)
     stepper.setSpeed(_MotorSpeed);
   else  
     stepper.setSpeed(-_MotorSpeed);
+Serial.print(stepper.speed());
+Serial.println("");
+
 }
 
 /*
@@ -613,7 +664,7 @@ void Display()
     {    
       lcd.setCursor(0, 0);
       lcd.print(param[selected_param].name);
-      lcd.print(" -> ");
+      lcd.print("->");
       lcd.print(param[selected_param].value);
     }
   }
@@ -632,30 +683,92 @@ void Control()
 void ButtonNon()
 {
   if(state == ST_ONRUN)
-  {
-    state = ST_SELECT;
-  }
-  //update_display = true;
+  {    
+    switch (start_mode)
+    {
+    case st_4T:
+      // nothing to do, it's running
+      break;
+    case st_2T:
+      state = ST_SELECT;
+      update_display = true;
+      // Stop cycle, call desceleratng function here /////////////!!!!!!!!!!!!!!!
+ Timer1.stop(); // Create a stop procedure with stopping timer
+      delay(200); // Remove it!
+ 
+      break;
+    default:
+      Serial.print("WARNING!!! We should not get in to here");
+      Serial.println("");   
+      break; 
+    }
+  }  
 }
+void ButtonS()
+{    
+  if(state == ST_ONRUN)
+  {
+    switch (start_mode)
+    {
+      case st_2T: //  nothing to do, it's already running
+        break;
+      case st_4T: // stop cycle 
+        state = ST_SELECT;
+        update_display = true;
+        //call desceleratng function here ///////////////////!!!!!!!!!!!!!!
+        delay(200); // Remove it!
+
+    Serial.print("Button S - stop");
+    Serial.println("");
+
+        break;
+      default:
+        break;
+    }
+  }
+  else // state == ST_SELECT
+  {
+    Serial.println("");
+    Serial.print("Button S - start");
+    Serial.println("");
+
+    UpdateStartSettings();
+    state = ST_ONRUN; // Enable running
+    update_display = true;
+    delay(100); // to avoid immediate stop in 4T mode
+  }
+}  
+  
+void ButtonP()
+{  
+  Serial.print("Button P");
+  Serial.println("");     
+}
+
 void ButtonA()
 {
+Serial.print("Button A");
+Serial.println("");
   
   if(state == ST_ONRUN)
   { // nothing to do
   }
   else
-  {
-Serial.print("Button A");
-Serial.println("");
-
-    state = ST_ONRUN; // Enable running motor
+  { 
+    // change of parameter selection
+    selected_param +=1; // iterate by index of parameter
+    if (selected_param >= NUM_PARAM)
+      selected_param = 0;
+    delay(300); // to avoid rapid change of selection
     update_display = true;
   }
 }
+
 void ButtonB()
 {
-//Serial.print("Button B");
-//Serial.println("");
+Serial.print("Button B");
+Serial.println("");
+
   if(state == ST_ONRUN)
   {
     // Only changing motor speed in the run mode
@@ -681,9 +794,9 @@ Serial.println("");
   else
   { 
     // change of parameter selection
-    selected_param +=1; // iterate by index of parameter
-    if (selected_param == NUM_PARAM)
-      selected_param = 0;
+    selected_param -=1; // iterate by index of parameter
+    if (selected_param < 0)
+      selected_param = NUM_PARAM-1;
     delay(300); // to avoid rapid change of selection
     update_display = true;
   }
@@ -712,41 +825,60 @@ Serial.println("");
 void Buttons()
 {
   byte pressed_button;
-  if (digitalRead(buttonPinA)==LOW)
-    pressed_button = bt_A;
-  else if (digitalRead(buttonPinC)==LOW)
-    pressed_button = bt_C;
-  else if (digitalRead(buttonPinB)==LOW)
-    pressed_button = bt_B;
-  else if (digitalRead(buttonPinD)==LOW)
-    pressed_button = bt_D;
+  if(state == ST_ONRUN)
+  { // Handle the Start button only for the sake of speed
+      if (digitalRead(buttonPinS)==LOW)
+        pressed_button = bt_S;
+      else
+        pressed_button = bt_Non;
+  }
   else
-    pressed_button = bt_Non;
+  { // Handle all buttons
+    if (digitalRead(buttonPinS)==LOW)
+      pressed_button = bt_S;
+    else if (digitalRead(buttonPinP)==LOW)
+      pressed_button = bt_P;
+    else if (digitalRead(buttonPinA)==LOW)
+      pressed_button = bt_A;
+    else if (digitalRead(buttonPinB)==LOW)
+      pressed_button = bt_B;
+    else if (digitalRead(buttonPinC)==LOW)
+      pressed_button = bt_C;
+    else if (digitalRead(buttonPinD)==LOW)
+      pressed_button = bt_D;
+    else
+      pressed_button = bt_Non;
+  }
 
   switch(pressed_button)
   {
     case bt_Non: // No buttons pressed
       ButtonNon();
       break; 
-    case bt_A: // Run/Stop
+    case bt_S: // Start
+      ButtonS();
+      break;
+    case bt_P: // Load
+      ButtonP();
+      break;
+    case bt_A: // Select-Up
       ButtonA();
       break;
-    case bt_C: // Select
+    case bt_C: // Select-Down
       ButtonC();
       break;
-    case bt_B: // Left/Down
+    case bt_B: // Left
       ButtonB();
       break;
-    case bt_D: // Right/Up
+    case bt_D: // Right
       ButtonD();
       break;
     default:
       break;
   }
-  if((pressed_button == bt_B) || (pressed_button == bt_C) || (pressed_button == bt_D))
+  if((pressed_button == bt_A) || (pressed_button == bt_B) || (pressed_button == bt_C) || (pressed_button == bt_D))
   {
     UpdateGlobalSettings();
-    //UpdateMotor();
   }
 }
 
@@ -754,10 +886,9 @@ void loop()
 {
   Display();
   Buttons();
-//  MotorTest();
+ // MotorTest();
   Run_Modes();
 //  Control();
 //  Motor();
 //  Pause();
 }
-
