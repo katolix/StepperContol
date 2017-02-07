@@ -1,6 +1,6 @@
 // Copyright (C) 2017 Vladimir Tsymbal
 // e-mail: vladimir.tsymbal@web.de
-//
+// v.0.1
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
 
@@ -309,7 +309,7 @@ Serial.println("");
 // Call this function once when starting a cycle
 void UpdateStartSettings()
 {
-  Timer1.stop(); // Need to stop timer as it might continue counting from previous cycle 
+  //Timer1.stop(); // Need to stop timer as it might continue counting from previous cycle 
   timer_flag = false;
   reset_timer = true; // Flag to reset timer when startina a cycle
   is_newaction = true;
@@ -356,18 +356,12 @@ Serial.println("");
             if(reset_timer)
             {
               // Set up the timer
-              //long timer = fw_feed.time_period * 1000;
-              TCNT1 = 1;
-              Timer1.setPeriod(timer * 1000);
-  noInterrupts();
-  timer_flag = false;
-  interrupts();
- 
-              Timer1.resume();
-Serial.print("FW Timer start ");
-Serial.print(timer);
+Serial.print("FW Timer start - before");
+//Serial.print(timer);
 Serial.println("");
-              
+              Timer1.setPeriod(timer * 1000);
+Serial.print("FW Timer start - after");
+Serial.println("");
             }
           }
           if (timer_flag != true){ // Timer is not finished
@@ -410,7 +404,6 @@ Serial.println("");
             {
               // Set up the timer
               //long timer = ps_feed.time_period * 1000;
-              TCNT1 = 1;
               Timer1.setPeriod(timer * 1000);
               //Timer1.start();
               
@@ -457,12 +450,11 @@ Serial.println("");
             {
               // Set up the timer
               //long timer = bw_feed.time_period * 1000;
-              TCNT1 = 1;
-              Timer1.setPeriod(timer * 1000);
-              //Timer1.start();
-              
-Serial.print("BW Timer start ");
-Serial.print(timer);
+Serial.print("BW Timer start - before");
+Serial.println("");
+              Timer1.setPeriod(timer * 1000);              
+Serial.print("BW Timer start - after");
+//Serial.print(timer);
 Serial.println("");
             }
           }
@@ -497,107 +489,7 @@ Serial.println("");
     }
   }
 }
-/*
-void Run_Modes()
-{
-  if(state == ST_ONRUN)
-  {
-    // Get the ongoing action from the current mode
-    Mode* mode = &run_mode_list[g_mode];  
-    Action* ac = mode->GetAction();
-    byte act_type = ac->act_type;
-    
-    switch(act_type)
-    {
-      case ac_FW:
-      case ac_BW:
-        // Action: FW/BW Feed
-        if(!ac->is_finished){
-          if(ac->is_newaction){
-            ac->is_newaction = false;
-            // Action just started. 
-            UpdateMotorSpeed(ac->dir_CW);
-            if(reset_timer)
-            {
-              // Set up the timer
-              long timer = ac->time_period * 1000000;
-              Timer1.setPeriod(timer);
-              //Timer1.start();
-Serial.print("Timer start ");
-Serial.print(timer);
-Serial.println("");
 
-            }
-
-          }
-          if (timer_flag != true)
-            //ac->Func(); //Motor step FW ///////////////////////////////////////////
-            stepper.runSpeed();
-          else
-          { // Action time is over
-            ac->is_finished = true;
-            Timer1.stop();
-            timer_flag = false; // timer flag down
-            reset_timer = true; // reset timer next time
-
-Serial.print("Timer stop");
-Serial.println("");
-
-            // Toggle next action in the current mode
-            mode->NextAction();
-          }
-        }
-        break;
-//      case ac_BW:
-//        stepper.runSpeed();        
-//
-//        break;
-
-      case ac_PS: // Pause
-        // Action: Pause Feed
-        if(!ac->is_finished){
-          if(ac->is_newaction){
-            ac->is_newaction = false;
-            // Action just started. 
-            UpdateMotorSpeed(ac->dir_CW); // no need, but leave it for commonless
-            if(reset_timer)
-            {
-              // Set up the timer
-              long timer = ac->time_period * 1000000;
-              Timer1.setPeriod(timer);
-              //Timer1.start();
-            }
-          }
-          if (timer_flag != true)
-            //ac->Func(); // Later implement an Action function for sleeping
-            delay(1); // Sleep for 1 ms
-          else
-          { // Action time is over
-            ac->is_finished = true;
-            Timer1.stop();
-            timer_flag = false; // timer flag down
-            reset_timer = true; // reset timer next time
-            // Toggle next action in the current mode
-            mode->NextAction();
-          }
-        }
-        break;
-      default:
-        break;
-    }
-  }
-}
-*/
-// Call this funciton when need to change motor settings
-// Make sure it's not called frequently
-/*
-void UpdateMotor()
-{
-  stepper.setMaxSpeed(_MotorSpeed);
-  _MotorDirCW ? stepper.setSpeed(_MotorSpeed) : stepper.setSpeed(-_MotorSpeed);
-  stepper.setAcceleration(_MotorAccel);
-}
-*/
 void UpdateMotorSpeed(bool isCW)
 {
   if(isCW)
@@ -669,16 +561,7 @@ void Display()
     }
   }
 }
-void Control()
-{
-/*
-  // Changing motorspeed during run
-  float val = analogRead(0);
-  float tmp = (MAX_MOTOR_SPEED - MIN_MOTOR_SPEED) / 1024.0;
-  _MotorSpeed = MIN_MOTOR_SPEED + tmp * val; // Setting motor sped in a range [MIN,MAX] depending on potentiometer
-  _MotorAccel = _MotorSpeed - _MotorSpeed / 16; // Setting acceleration speed 6.25% slower than current motor speed
-*/
-}
+
 
 void ButtonNon()
 {
@@ -694,6 +577,7 @@ void ButtonNon()
       update_display = true;
       // Stop cycle, call desceleratng function here /////////////!!!!!!!!!!!!!!!
  Timer1.stop(); // Create a stop procedure with stopping timer
+ TCNT1 = 1;
       delay(200); // Remove it!
  
       break;
@@ -716,6 +600,7 @@ void ButtonS()
         state = ST_SELECT;
         update_display = true;
         //call desceleratng function here ///////////////////!!!!!!!!!!!!!!
+Timer1.stop(); // Create a stop procedure with stopping timer
         delay(200); // Remove it!
 
     Serial.print("Button S - stop");
@@ -888,7 +773,5 @@ void loop()
   Buttons();
  // MotorTest();
   Run_Modes();
-//  Control();
-//  Motor();
 //  Pause();
 }
