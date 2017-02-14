@@ -13,19 +13,25 @@
 // User definable parameters
 //===================================================================================================//
 
-#define STEPS_PER_ROTATION 200
-#define MIN_RUN_MODE 0 // 2 tackt start mode 
-#define MAX_RUN_MODE 1 // 4 tackt start mode
+#define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
+#define PULLEY_DIA 30 // Diameter of pulley, mm
+
+#define MIN_RUN_MODE 2 // 2 tackt start mode 
+#define MAX_RUN_MODE 4 // 4 tackt start mode
 #define MAX_MOTOR_SPEED 1000 // Maximum speed, steps/s
 #define MIN_MOTOR_SPEED 100 // Minimum speed, steps/s
+
+#define MAX_FEED_SPEED 10 // Maximum speed, m/min
+#define MIN_FEED_SPEED 0 // Minimum speed, m/min
+
 #define MAX_ACCEL_TIME 5 // Maximum time for acceleration, s
 #define MIN_ACCEL_TIME 1 // Minimum time for acceleration, s
 #define MAX_FW_TIME 8 // Maximum forward feed time, s
 #define MIN_FW_TIME 0 // Minimum forward feed time, s
 #define MAX_BW_TIME 8 // Maximum backward feed time, s
 #define MIN_BW_TIME 0 // Minimum backward feed time, s
-#define MAX_PAUSE 1 // Maximum pause length, s
-#define MIN_PAUSE 0 // Minimum pause length, s
+#define MAX_PAUSE 1 // Maximum pause time, s
+#define MIN_PAUSE 0 // Minimum pause time, s
 
 // Define a stepper and the pins it will use
 AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
@@ -83,8 +89,8 @@ enum button
 };
 enum _start_mode
 {
-  st_2T,
-  st_4T,
+  st_2T = 2,
+  st_4T = 4,
 };
 
 enum param_id
@@ -120,10 +126,10 @@ const Param* GetParam(byte id){
 class Action
 {
   public:
-    Action(byte type, bool dir) : act_type(type), dir_CW(dir) {}
+    Action(byte type, float dir) : act_type(type), dir(dir) {}
     byte act_type;
     long time_period; // Action time, ms
-    bool dir_CW; // Direction of motor rotation: true=CW, false=CCW
+    float dir; // Direction of motor rotation: CW=1, CCW=-1, Non=0
     void (*func)(); // A function to run by action object
     void SetFunction( void(*func)() ) {
       this->func = func;};
@@ -139,9 +145,9 @@ void StepperNoRun() {
 }
 
 // According to the 3 action types:
-Action fw_feed(ac_FW, true);
-Action bw_feed(ac_BW, false);
-Action ps_feed(ac_PS, true);
+Action fw_feed(ac_FW, 1);
+Action bw_feed(ac_BW, -1);
+Action ps_feed(ac_PS, 0);
 
 // The Mode class combines one or several actions,
 // being called one by one in a loop
@@ -185,10 +191,10 @@ Mode g_mode;
 
 // Global updatable motor settings
 float _MotorSpeed; // steping motor speed, steps/sec
-float _MotorAccel = MAX_MOTOR_SPEED; //motor acceleration, steps/sec
-float _FeedSteps = 400; // number of steps for a single feed loop, steps
+float _MotorAccelTime; //motor acceleration/decceleration, sec
 
-float _Pos = 0; // Current position of motor, steps
+float _FpeedSpeed; // Feed speed defined by motor speed and deameter of pulley 
+
 
 // Global flags
 bool _state = ST_SELECT;
@@ -262,7 +268,7 @@ void setup()
   param[par_stmode].id = par_stmode;
   param[par_stmode].min = MIN_RUN_MODE;
   param[par_stmode].max = MAX_RUN_MODE;
-  param[par_stmode].inc = 1;
+  param[par_stmode].inc = 2;
 
 
 
@@ -271,7 +277,7 @@ void setup()
   _update_display = true;
 
 
-  // Initializing Timer1 and assigning ISR handler
+  // Initializing Timer1, by default 1 sec
   Timer1.initialize(1000000);
   Timer1.stop();
 
@@ -290,10 +296,14 @@ void setup()
 // Parameters are copied to global settings
 void UpdateGlobalSettings()
 {
+  // Feed speed is defined by the formula:
+  // FpeedSpeed = ( MotorSpeed / STEPS_PER_ROTATION ) * 60 * (PULLEY_DIA / 1000) * PI
+  _MotorSpeed = ( _FpeedSpeed * STEPS_PER_ROTATION * 1000 ) / (PULLEY_DIA * PI * 60);
+  
   // Updating selected values
   _start_mode = (byte)param[par_stmode].value;
   _MotorSpeed = param[par_speed].value;
-  _MotorAccel = param[par_accel].value;
+  _MotorAccelTime = param[par_accel].value;
 
 
   fw_feed.time_period = param[par_fwtime].value * 1000; // Convert FP sec into ms
@@ -343,7 +353,7 @@ void Run_Modes()
       }
       _is_newaction = false;
       // Action just started.
-      UpdateMotorSpeed(ac->dir_CW); // CW/CCW dir
+      UpdateMotorSpeed(ac->dir); // CW/CCW/0 dir
       if (reset_timer) // may be not needed???
       {
         // Set up the timer
@@ -369,15 +379,10 @@ void Run_Modes()
 }
 
 
-void UpdateMotorSpeed(bool isCW)
+void UpdateMotorSpeed(float dir)
 {
-  if (isCW)
-    stepper.setSpeed(_MotorSpeed);
-  else
-    stepper.setSpeed(-_MotorSpeed);
-  Serial.print(stepper.speed());
-  Serial.println("");
-
+  stepper.setSpeed(_MotorSpeed * dir);
+  Serial.println(stepper.speed());
 }
 
 
@@ -406,6 +411,21 @@ void Display()
   }
 }
 
+// Assumed to call in ST_ONRUN state 
+void StopCycle()
+{
+// Stop motor with decceleration
+  stepper.DeccelFromSpeed(_MotorAccelTime); 
+  Serial.println("=====================");
+  /// Maybe need to check if the motor is in FW feed
+  while (stepper.run())
+  ;
+  // Change state to mode select
+  _state = ST_SELECT;
+  // Stop timer and reset it's couting register
+  Timer1.stop();
+  TCNT1 = 1;
+}
 
 void ButtonNon()
 {
@@ -417,12 +437,15 @@ void ButtonNon()
         // nothing to do, it's running
         break;
       case st_2T:
+        StopCycle();
+/*
         _state = ST_SELECT;
-        _update_display = true;
         // Stop cycle, call desceleratng function here /////////////!!!!!!!!!!!!!!!
         Timer1.stop(); // Create a stop procedure with stopping timer
         TCNT1 = 1;
         delay(200); // Remove it!
+*/
+        _update_display = true;
 
         break;
       default:
@@ -441,14 +464,9 @@ void ButtonS()
       case st_2T: //  nothing to do, it's already running
         break;
       case st_4T: // stop cycle
-        _state = ST_SELECT;
-        _update_display = true;
-        //call desceleratng function here ///////////////////!!!!!!!!!!!!!!
-        Timer1.stop(); // Create a stop procedure with stopping timer
-        delay(200); // Remove it!
-
         Serial.println("Button S - stop");
-
+        StopCycle();
+        _update_display = true;
         break;
       default:
         break;
@@ -461,7 +479,7 @@ void ButtonS()
     UpdateStartSettings();
     _state = ST_ONRUN; // Enable running
     _update_display = true;
-    delay(100); // to avoid immediate stop in 4T mode
+    delay(200); // to avoid immediate stop in 4T mode
   }
 }
 
