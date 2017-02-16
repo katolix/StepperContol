@@ -10,28 +10,43 @@
 #include <Wire.h>
 #include <AccelStepper.h>
 
-// User definable parameters
+// User defined parameters
 //===================================================================================================//
+#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
-#define PULLEY_DIA 30 // Diameter of pulley, mm
+#define PULLEY_DIA 10 // Diameter of pulley, mm
 
-#define MIN_RUN_MODE 2 // 2 tackt start mode 
-#define MAX_RUN_MODE 4 // 4 tackt start mode
+#ifdef LIN_SPEED
+#define MAX_LIN_SPEED 10 // Maximum linear speed, m/min
+#define MIN_LIN_SPEED 0 // Minimum linear speed, m/min
+#define INC_LIN_SPEED 0.1 // Increment linear speed, m/min
+#else
 #define MAX_MOTOR_SPEED 1000 // Maximum speed, steps/s
 #define MIN_MOTOR_SPEED 100 // Minimum speed, steps/s
-
-#define MAX_FEED_SPEED 10 // Maximum speed, m/min
-#define MIN_FEED_SPEED 0 // Minimum speed, m/min
+#define INC_MOTOR_SPEED 1 // Minimum speed, steps/s
+#endif // LIN_SPEED
 
 #define MAX_ACCEL_TIME 5 // Maximum time for acceleration, s
 #define MIN_ACCEL_TIME 1 // Minimum time for acceleration, s
+#define INC_ACCEL_TIME 1 // Increment time for acceleration, s
+
 #define MAX_FW_TIME 8 // Maximum forward feed time, s
 #define MIN_FW_TIME 0 // Minimum forward feed time, s
+#define INC_FW_TIME 0.1 // Increment forward feed time, s
+
 #define MAX_BW_TIME 8 // Maximum backward feed time, s
 #define MIN_BW_TIME 0 // Minimum backward feed time, s
+#define INC_BW_TIME 0.1 // Increment backward feed time, s
+
 #define MAX_PAUSE 1 // Maximum pause time, s
 #define MIN_PAUSE 0 // Minimum pause time, s
+#define INC_PAUSE 0.1 // Increment pause time, s
+
+#define MIN_RUN_MODE 2 // 2 tackt start mode 
+#define MAX_RUN_MODE 4 // 4 tackt start mode
+#define INC_RUN_MODE 2 // increment tackt start mode
+
 
 // Define a stepper and the pins it will use
 AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
@@ -131,18 +146,13 @@ class Action
     long time_period; // Action time, ms
     float dir; // Direction of motor rotation: CW=1, CCW=-1, Non=0
     void (*func)(); // A function to run by action object
-    void SetFunction( void(*func)() ) {
-      this->func = func;};
-    void CallFunction() {
-      return func();};
+    void SetFunction( void(*func)() ) {this->func = func;};
+    void CallFunction() {return func();};
 };
 
 // Action functions
-void StepperRunSpeed() {
-  stepper.runSpeed();
-}
-void StepperNoRun() {
-}
+void StepperRunSpeed() { stepper.runSpeed();}
+void StepperNoRun() {}
 
 // According to the 3 action types:
 Action fw_feed(ac_FW, 1);
@@ -193,8 +203,6 @@ Mode g_mode;
 float _MotorSpeed; // steping motor speed, steps/sec
 float _MotorAccelTime; //motor acceleration/decceleration, sec
 
-float _FpeedSpeed; // Feed speed defined by motor speed and deameter of pulley 
-
 
 // Global flags
 bool _state = ST_SELECT;
@@ -202,6 +210,7 @@ bool _update_display = true;
 bool reset_timer = true;
 bool _is_newaction = true;
 byte _start_mode = 0;
+
 
 void setup()
 {
@@ -228,53 +237,56 @@ void setup()
 
   // Setting parameters for display
 
+#ifdef LIN_SPEED
+  strcpy( param[par_speed].name, "Speed");
+  param[par_speed].id = par_speed;
+  param[par_speed].value = MAX_LIN_SPEED;
+  param[par_speed].min = MIN_LIN_SPEED;
+  param[par_speed].max = MAX_LIN_SPEED;
+  param[par_speed].inc = INC_LIN_SPEED;
+#else
   strcpy( param[par_speed].name, "Speed");
   param[par_speed].id = par_speed;
   param[par_speed].value = MAX_MOTOR_SPEED;
   param[par_speed].min = MIN_MOTOR_SPEED;
   param[par_speed].max = MAX_MOTOR_SPEED;
-  param[par_speed].inc = 1;
+  param[par_speed].inc = INC_MOTOR_SPEED;
+#endif //LIN_SPEED
 
   strcpy( param[par_fwtime].name, "FW time");
   param[par_fwtime].id = par_fwtime;
   param[par_fwtime].value = (float)fw_feed.time_period / 1000;
   param[par_fwtime].max = MAX_FW_TIME;
   param[par_fwtime].min = MIN_FW_TIME;
-  param[par_fwtime].inc = 0.1;
+  param[par_fwtime].inc = INC_FW_TIME;
 
   strcpy( param[par_pause].name, "Pause");
   param[par_pause].id = par_pause;
   param[par_pause].value = (float)ps_feed.time_period / 1000;
   param[par_pause].max = MAX_PAUSE;
   param[par_pause].min = MIN_PAUSE;
-  param[par_pause].inc = 0.1;
+  param[par_pause].inc = INC_PAUSE;
 
   strcpy( param[par_bwtime].name, "BW time");
   param[par_bwtime].id = par_bwtime;
   param[par_bwtime].value = (float)bw_feed.time_period / 1000;
   param[par_bwtime].max = MAX_BW_TIME;
   param[par_bwtime].min = MIN_BW_TIME;
-  param[par_bwtime].inc = 0.1;
+  param[par_bwtime].inc = INC_BW_TIME;
 
   strcpy( param[par_accel].name, "Accel");
   param[par_accel].id = par_accel;
   param[par_accel].value = MIN_ACCEL_TIME;
   param[par_accel].max = MAX_ACCEL_TIME;
   param[par_accel].min = MIN_ACCEL_TIME;
-  param[par_accel].inc = 1;
+  param[par_accel].inc = INC_ACCEL_TIME;
 
   strcpy( param[par_stmode].name, "Mode");
   param[par_stmode].value = MIN_RUN_MODE; // First mode
   param[par_stmode].id = par_stmode;
   param[par_stmode].min = MIN_RUN_MODE;
   param[par_stmode].max = MAX_RUN_MODE;
-  param[par_stmode].inc = 2;
-
-
-
-  stepper.setMaxSpeed(param[par_speed].value);
-  stepper.setSpeed(param[par_speed].value);
-  _update_display = true;
+  param[par_stmode].inc = INC_RUN_MODE;
 
 
   // Initializing Timer1, by default 1 sec
@@ -290,21 +302,36 @@ void setup()
   _state == ST_SELECT; // Set in select state
 
   UpdateGlobalSettings(); // Sync-up params
+  _update_display = true;
+}
+
+float Lin2StepSpeed(float linear_speed) /// make it inlined
+{
+  // Linear motion speed is defined by the formula:
+  // MotionSpeed = ( MotorSpeed / STEPS_PER_ROTATION ) * 60 * (PULLEY_DIA / 1000) * PI
+  // MotorSpeed = ( MotionSpeed * STEPS_PER_ROTATION * 1000 ) / (PULLEY_DIA * PI * 60);
+
+  return ( linear_speed * STEPS_PER_ROTATION * 1000 ) / (PULLEY_DIA * PI * 60);
 }
 
 // Call this funciton when changed some settings using buttons
 // Parameters are copied to global settings
 void UpdateGlobalSettings()
 {
-  // Feed speed is defined by the formula:
-  // FpeedSpeed = ( MotorSpeed / STEPS_PER_ROTATION ) * 60 * (PULLEY_DIA / 1000) * PI
-  _MotorSpeed = ( _FpeedSpeed * STEPS_PER_ROTATION * 1000 ) / (PULLEY_DIA * PI * 60);
-  
   // Updating selected values
-  _start_mode = (byte)param[par_stmode].value;
+  // Moroe speed depends on whether it set in linear or motor speed
+  float maxspeed;
+#ifdef LIN_SPEED
+  _MotorSpeed = Lin2StepSpeed( param[par_speed].value );
+  maxspeed = Lin2StepSpeed( MAX_LIN_SPEED );
+#else
   _MotorSpeed = param[par_speed].value;
+  maxspeed = MAX_MOTOR_SPEED;
+#endif // LIN_SPEED
+  stepper.setMaxSpeed(maxspeed);
+  stepper.setSpeed(_MotorSpeed);
   _MotorAccelTime = param[par_accel].value;
-
+  _start_mode = (byte)param[par_stmode].value;
 
   fw_feed.time_period = param[par_fwtime].value * 1000; // Convert FP sec into ms
   bw_feed.time_period = param[par_bwtime].value * 1000;
@@ -379,9 +406,10 @@ void Run_Modes()
 }
 
 
-void UpdateMotorSpeed(float dir)
+void UpdateMotorSpeed(float dir) /// make it inlined
 {
   stepper.setSpeed(_MotorSpeed * dir);
+  Serial.print("Motor Speed: ");
   Serial.println(stepper.speed());
 }
 
@@ -399,7 +427,7 @@ void Display()
       lcd.setCursor(0, 0);
       lcd.print("Speed: ");
       lcd.setCursor(8, 0);
-      lcd.print(_MotorSpeed);
+      lcd.print(param[par_speed].value);
     }
     else
     {
@@ -438,15 +466,7 @@ void ButtonNon()
         break;
       case st_2T:
         StopCycle();
-/*
-        _state = ST_SELECT;
-        // Stop cycle, call desceleratng function here /////////////!!!!!!!!!!!!!!!
-        Timer1.stop(); // Create a stop procedure with stopping timer
-        TCNT1 = 1;
-        delay(200); // Remove it!
-*/
         _update_display = true;
-
         break;
       default:
         Serial.print("WARNING!!! We should not get in to here");
