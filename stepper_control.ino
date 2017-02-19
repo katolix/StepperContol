@@ -12,10 +12,13 @@
 
 // User defined parameters
 //===================================================================================================//
-#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
+//#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
+
+#define STEPPER_DIR_PIN 3
+#define STEPPER_STEP_PIN 2
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
-#define PULLEY_DIA 10 // Diameter of pulley, mm
+#define PULLEY_DIA 30 // Diameter of pulley, mm
 
 #ifdef LIN_SPEED
 #define MAX_LIN_SPEED 10 // Maximum linear speed, m/min
@@ -49,7 +52,8 @@
 
 
 // Define a stepper and the pins it will use
-AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
+//AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
+AccelStepper stepper(AccelStepper::DRIVER, STEPPER_STEP_PIN, STEPPER_DIR_PIN); // 
 
 // Define an LCD screen
 rgb_lcd lcd;
@@ -354,8 +358,7 @@ void UpdateStartSettings()
 
 void MotorTest()
 {
-  //Serial.print(_MotorSpeed);
-  //Serial.println("");
+  //Serial.println(_MotorSpeed);
   if (_state == ST_ONRUN)
     stepper.runSpeed();
 }
@@ -639,6 +642,6 @@ void loop()
   Display();
   SelectButtons();
   RunButtons();
-  // MotorTest();
-  Run_Modes();
+  MotorTest();
+  //Run_Modes();
 }
