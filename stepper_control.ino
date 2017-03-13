@@ -1,6 +1,6 @@
 // Copyright (C) 2017 Vladimir Tsymbal
 // e-mail: vladimir.tsymbal@web.de
-// v.0.1
+// v.0.2
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
 
@@ -10,12 +10,13 @@
 #include <Wire.h>
 #include <AccelStepper.h>
 
+
 // User defined parameters
 //===================================================================================================//
 //#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
 
-#define STEPPER_DIR_PIN 3
-#define STEPPER_STEP_PIN 2
+//#define STEPPER_DIR_PIN 3
+//#define STEPPER_STEP_PIN 2
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
 #define PULLEY_DIA 30 // Diameter of pulley, mm
@@ -50,10 +51,38 @@
 #define MAX_RUN_MODE 4 // 4 tackt start mode
 #define INC_RUN_MODE 2 // increment tackt start mode
 
+//==============================================================================
+// Rotary encoder declarations
+const int EncPinA = 2; // Our first hardware interrupt pin is digital pin 2
+const int EncPinB = 3; // Our second hardware interrupt pin is digital pin 3
+
+volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
+volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
+volatile byte encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
+volatile byte oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
+volatile byte readingEnc = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
+
+// Button reading, including debounce without delay function declarations
+const int buttonPinEnc = 4; // Arduino pin for encoder push button
+byte oldEncButtonState = HIGH;  // assume switch open because of pull-up resistor
+
+const unsigned long debounceTime = 10;  // milliseconds
+unsigned long buttonPressTime;  // when the switch last changed state
+boolean buttonPressed = 0; // a flag variable
+
+#define MENU_TOP 0
+#define MENU_BOT 1
+byte _MenuLevel = MENU_TOP; // With two levels of menu it can be 0 or 1
+
+//==============================================================================
+
+
 
 // Define a stepper and the pins it will use
 //AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
-AccelStepper stepper(AccelStepper::DRIVER, STEPPER_STEP_PIN, STEPPER_DIR_PIN); // 
+AccelStepper stepper(AccelStepper::HALF4WIRE, 12, 14, 13, 15); // Defaults to 4 pins on 2, 3, 4, 5
+
+//AccelStepper stepper(AccelStepper::DRIVER, STEPPER_STEP_PIN, STEPPER_DIR_PIN); // 
 
 // Define an LCD screen
 rgb_lcd lcd;
@@ -219,6 +248,16 @@ byte _start_mode = 0;
 void setup()
 {
   Serial.begin(9600);
+
+  //Rotary encoder section of setup
+  pinMode(EncPinA, INPUT_PULLUP); // set pinA as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
+  pinMode(EncPinB, INPUT_PULLUP); // set pinB as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
+  attachInterrupt(digitalPinToInterrupt(EncPinA),EncPinA_ISR,RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
+  attachInterrupt(digitalPinToInterrupt(EncPinB),EncPinB_ISR,RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
+  // button section of setup
+  pinMode (buttonPinEnc, INPUT_PULLUP); // setup the button pin
+
+//============================================================
   
   pinMode(buttonPinA, INPUT_PULLUP);
   pinMode(buttonPinB, INPUT_PULLUP);
@@ -436,7 +475,10 @@ void Display()
     {
       lcd.setCursor(0, 0);
       lcd.print(param[_selected_param].name);
-      lcd.print("->");
+      if(_MenuLevel == MENU_TOP)
+        lcd.print("  ");
+      else
+        lcd.print("->");
       lcd.print(param[_selected_param].value);
     }
   }
@@ -583,6 +625,20 @@ void RunButtons()
   }
 }
 
+// Debouncng of pressed button
+// Use it only for select buttons !!!
+// As it introduces a delay of 5 ms
+bool IsButtonLow(const int button)
+{
+  bool current = digitalRead(button);
+  if (current == LOW)
+  {
+    delay(5);
+    current = digitalRead(button);
+  }
+  return current;
+}
+
 // Isolate select buttons in case we change to substitute them with select encoder
 void SelectButtons()
 {
@@ -590,6 +646,7 @@ void SelectButtons()
   { // Handle all buttons
     byte pressed_button;
     if (digitalRead(buttonPinS) == LOW)
+    //if (IsButtonLow(buttonPinS))
       pressed_button = bt_S;
     else if (digitalRead(buttonPinP) == LOW)
       pressed_button = bt_P;
@@ -642,6 +699,115 @@ void loop()
   Display();
   SelectButtons();
   RunButtons();
-  MotorTest();
-  //Run_Modes();
+  //MotorTest();
+  Run_Modes();
+
+  rotaryMenu();
+
+}
+
+
+void rotaryMenu() { //This handles the bulk of the menu functions without needing to install/include/compile a menu library
+  if (_state != ST_SELECT)
+    return;
+  
+
+  byte buttonState = digitalRead (buttonPinEnc); 
+  if (buttonState != oldEncButtonState){
+    if (millis () - buttonPressTime >= debounceTime){ // debounce
+      buttonPressTime = millis ();  // when we closed the switch 
+      oldEncButtonState =  buttonState;  // remember for next time 
+      if (buttonState == LOW){
+        Serial.println ("Button closed"); // DEBUGGING: print that button has been closed
+        buttonPressed = 1;
+      }
+      else {
+        Serial.println ("Button opened"); // DEBUGGING: print that button has been opened
+        buttonPressed = 0;  
+      }  
+    }  // end if debounce time up
+  } // end of state change
+  
+  if(buttonPressed)
+  { // Tougggle menu level
+    if(_MenuLevel == MENU_TOP) _MenuLevel = MENU_BOT;
+    else _MenuLevel = MENU_TOP;
+    buttonPressed = 0; // reset the button status so one press results in one action
+    _update_display = true;
+    UpdateGlobalSettings();
+  }
+
+
+  if(oldEncPos != encoderPos) {
+   Serial.println(encoderPos);// DEBUGGING. Sometimes the serial monitor may show a value just outside modeMax due to this function. The menu shouldn't be affected.
+
+    switch (_MenuLevel)
+    {
+      case MENU_TOP: // Top menu level
+        if(encoderPos > oldEncPos) {
+          ButtonA();
+        }
+        if(encoderPos < oldEncPos) {
+          ButtonC();
+        }
+        break;
+      case MENU_BOT: // Parameter menu level
+        if(encoderPos > oldEncPos) {
+          ButtonB();
+        }
+        if(encoderPos < oldEncPos) {
+          ButtonD();
+        }
+        break;
+      default:
+          break;
+    }    
+    oldEncPos = encoderPos;
+    UpdateGlobalSettings();
+  }
+}
+
+
+#if defined(ARDUINO_AVR_UNO)
+  #define PORT_ENC PIND
+  #define PORT_ENC_MSK 0xC
+  #define PIN23_MSK B00001100
+  #define PIN_2_MSK B00000100
+  #define PIN_3_MSK B00001000
+#elif defined(ARDUINO_AVR_MEGA2560)
+  #define PORT_ENC PINE
+  #define PORT_ENC_MSK 0x30
+  #define PIN23_MSK B00110000
+  #define PIN_2_MSK B00010000
+  #define PIN_3_MSK B00100000
+#elif defined(ARDUINO_SAM_DUE)
+//Due specific code
+#else
+  #error Unsupported hardware
+#endif
+
+//Rotary encoder interrupt service routine for one encoder pin
+void EncPinA_ISR(){
+  cli(); //stop interrupts happening before we read pin values
+  readingEnc = PORT_ENC & PORT_ENC_MSK; // read all eight pin values then strip away all but pinA and pinB's values
+  if(readingEnc == PIN23_MSK && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+    encoderPos --; //decrement the encoder's position count
+    bFlag = 0; //reset flags for the next turn
+    aFlag = 0; //reset flags for the next turn
+  }
+  else if (readingEnc == PIN_2_MSK) bFlag = 1; //signal that we're expecting pinB to signal the transition to detent from free rotation
+  sei(); //restart interrupts
+}
+
+//Rotary encoder interrupt service routine for the other encoder pin
+void EncPinB_ISR(){
+  cli(); //stop interrupts happening before we read pin values
+  readingEnc = PINE & 0x30; //read all eight pin values then strip away all but pinA and pinB's values
+  if (readingEnc == PIN23_MSK && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+    encoderPos ++; //increment the encoder's position count
+    bFlag = 0; //reset flags for the next turn
+    aFlag = 0; //reset flags for the next turn
+  }
+  else if (readingEnc == PIN_3_MSK) aFlag = 1; //signal that we're expecting pinA to signal the transition to detent from free rotation
+  sei(); //restart interrupts
 }
