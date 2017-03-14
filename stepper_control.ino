@@ -3,7 +3,8 @@
 // v.0.2
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
-
+// The Interrupt-based Rotary Encoder Menu Sketch
+// by Simon Merrett, based on insight from Oleg Mazurov, Nick Gammon, rt and Steve Spence, and code from Nick Gammon
 
 #include <TimerOneCTC.h>
 #include <rgb_lcd.h>
@@ -15,8 +16,6 @@
 //===================================================================================================//
 //#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
 
-//#define STEPPER_DIR_PIN 3
-//#define STEPPER_STEP_PIN 2
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
 #define PULLEY_DIA 30 // Diameter of pulley, mm
@@ -52,56 +51,42 @@
 #define INC_RUN_MODE 2 // increment tackt start mode
 
 //==============================================================================
-// Rotary encoder declarations
-const int EncPinA = 2; // Our first hardware interrupt pin is digital pin 2
-const int EncPinB = 3; // Our second hardware interrupt pin is digital pin 3
+// Assigned board pins to buttons
 
-volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
-volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
-volatile byte encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
-volatile byte oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
-volatile byte readingEnc = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
+const int EncPinA = 2; // Encoder channel A interrupt pin
+const int EncPinB = 3; // Encoder channel B interrupt pin
+const int buttonPinEnc = 4; // Encoder push button pin
 
-// Button reading, including debounce without delay function declarations
-const int buttonPinEnc = 4; // Arduino pin for encoder push button
-byte oldEncButtonState = HIGH;  // assume switch open because of pull-up resistor
+const int buttonPinS = 5; // Start button pin
+const int buttonPinP = 6; // Feed button pin
 
-const unsigned long debounceTime = 10;  // milliseconds
-unsigned long buttonPressTime;  // when the switch last changed state
-boolean buttonPressed = 0; // a flag variable
+const int buttonPinA = 7; // Button A pin
+const int buttonPinB = 8; // Button B pin
+const int buttonPinC = 9; // Button C pin
+const int buttonPinD = 10; // Button D pin
 
-#define MENU_TOP 0
-#define MENU_BOT 1
-byte _MenuLevel = MENU_TOP; // With two levels of menu it can be 0 or 1
+const int stepperDirPin = 11; // Stepper driver DIR pin
+const int stepperStepPin = 12; // Stepper driver STEP (PUL) pin
+const int stepperEnaPin = 13; // Stepper driver ENA pin
 
 //==============================================================================
 
-
-
 // Define a stepper and the pins it will use
 //AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
-AccelStepper stepper(AccelStepper::HALF4WIRE, 12, 14, 13, 15); // Defaults to 4 pins on 2, 3, 4, 5
+//AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
 
-//AccelStepper stepper(AccelStepper::DRIVER, STEPPER_STEP_PIN, STEPPER_DIR_PIN); // 
+AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
 
+//==============================================================================
 // Define an LCD screen
+
 rgb_lcd lcd;
 // Define LCD screen backlight color
 const int colorR = 100;
 const int colorG = 100;
 const int colorB = 0;
 
-// Assigned board pins to buttons
-// Specific to Arduino Mega 2560 board
-// You might wont to change for your board
-const int buttonPinA = 6;
-const int buttonPinB = 7;
-const int buttonPinC = 8;
-const int buttonPinD = 9;
-const int buttonPinS = 10;
-const int buttonPinP = 11;
-
-//===================================================================================================//
+//==============================================================================
 
 // State of system
 #define ST_SELECT 1 // Modes/parameters selection
@@ -164,10 +149,11 @@ typedef struct params
 
 int _selected_param = 0; // int type in order to be able to decrement a param from 0
 Param param[NUM_PARAM];
-const Param* GetParam(byte id){
+const Param* GetParam(byte id) {
   for (byte i = 0; i < NUM_PARAM; i++)  {
     if ( param[i].id == id )
-      return &param[i];  }
+      return &param[i];
+  }
 }
 
 // Action types with their timing parameters
@@ -179,12 +165,18 @@ class Action
     long time_period; // Action time, ms
     float dir; // Direction of motor rotation: CW=1, CCW=-1, Non=0
     void (*func)(); // A function to run by action object
-    void SetFunction( void(*func)() ) {this->func = func;};
-    void CallFunction() {return func();};
+    void SetFunction( void(*func)() ) {
+      this->func = func;
+    };
+    void CallFunction() {
+      return func();
+    };
 };
 
 // Action functions
-void StepperRunSpeed() { stepper.runSpeed();}
+void StepperRunSpeed() {
+  stepper.runSpeed();
+}
 void StepperNoRun() {}
 
 // According to the 3 action types:
@@ -230,7 +222,7 @@ void Mode::Reset() {
 }
 
 // Global mode
-Mode g_mode; 
+Mode g_mode;
 
 // Global updatable motor settings
 float _MotorSpeed; // steping motor speed, steps/sec
@@ -244,6 +236,26 @@ bool reset_timer = true;
 bool _is_newaction = true;
 byte _start_mode = 0;
 
+//==============================================================================
+// Rotary encoder and Menue declarations
+volatile byte aFlag = 0; // let's us know when we're expecting a rising edge on pinA to signal that the encoder has arrived at a detent
+volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on pinB to signal that the encoder has arrived at a detent (opposite direction to when aFlag is set)
+volatile byte encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
+volatile byte oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
+volatile byte readingEnc = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
+
+// Button reading, including debounce without delay function declarations
+byte oldEncButtonState = HIGH;  // assume switch open because of pull-up resistor
+
+const unsigned long debounceTime = 10;  // milliseconds
+unsigned long buttonPressTime;  // when the switch last changed state
+boolean buttonPressed = 0; // a flag variable
+
+#define MENU_TOP 0
+#define MENU_BOT 1
+byte _MenuLevel = MENU_TOP; // With two levels of menu it can be 0 or 1
+
+
 
 void setup()
 {
@@ -252,18 +264,23 @@ void setup()
   //Rotary encoder section of setup
   pinMode(EncPinA, INPUT_PULLUP); // set pinA as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
   pinMode(EncPinB, INPUT_PULLUP); // set pinB as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
-  attachInterrupt(digitalPinToInterrupt(EncPinA),EncPinA_ISR,RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
-  attachInterrupt(digitalPinToInterrupt(EncPinB),EncPinB_ISR,RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
+  attachInterrupt(digitalPinToInterrupt(EncPinA), EncPinA_ISR, RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
+  attachInterrupt(digitalPinToInterrupt(EncPinB), EncPinB_ISR, RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
   // button section of setup
   pinMode (buttonPinEnc, INPUT_PULLUP); // setup the button pin
 
-//============================================================
-  
+  //============================================================
+
   pinMode(buttonPinA, INPUT_PULLUP);
   pinMode(buttonPinB, INPUT_PULLUP);
   pinMode(buttonPinC, INPUT_PULLUP);
   pinMode(buttonPinD, INPUT_PULLUP);
   pinMode(buttonPinS, INPUT_PULLUP);
+  pinMode(buttonPinP, INPUT_PULLUP);
+  //=============================================================
+  pinMode(stepperDirPin, OUTPUT);
+  pinMode(stepperStepPin, OUTPUT);
+  pinMode(stepperEnaPin, OUTPUT);
 
 
   lcd.begin(16, 2);
@@ -475,7 +492,7 @@ void Display()
     {
       lcd.setCursor(0, 0);
       lcd.print(param[_selected_param].name);
-      if(_MenuLevel == MENU_TOP)
+      if (_MenuLevel == MENU_TOP)
         lcd.print("  ");
       else
         lcd.print("->");
@@ -484,15 +501,15 @@ void Display()
   }
 }
 
-// Assumed to call in ST_ONRUN state 
+// Assumed to call in ST_ONRUN state
 void StopCycle()
 {
-// Stop motor with decceleration
-  stepper.DeccelFromSpeed(_MotorAccelTime); 
+  // Stop motor with decceleration
+  stepper.DeccelFromSpeed(_MotorAccelTime);
   Serial.println("=====================");
   /// Maybe need to check if the motor is in FW feed
   while (stepper.run())
-  ;
+    ;
   // Change state to mode select
   _state = ST_SELECT;
   // Stop timer and reset it's couting register
@@ -553,7 +570,7 @@ void ButtonP()
   Serial.println("Button P");
 }
 
-void ButtonA()
+void ButtonA(bool postDelay)
 {
   Serial.println("Button A");
 
@@ -563,12 +580,13 @@ void ButtonA()
     _selected_param += 1; // iterate by index of parameter
     if (_selected_param >= NUM_PARAM)
       _selected_param = 0;
-    delay(300); // to avoid rapid change of selection
+    if (postDelay)
+      delay(300); // to avoid rapid change of selection
     _update_display = true;
   }
 }
 
-void ButtonB()
+void ButtonB(bool postDelay)
 {
   Serial.println("Button B");
 
@@ -578,11 +596,12 @@ void ButtonB()
     if (param[_selected_param].value > param[_selected_param].max)
       param[_selected_param].value = param[_selected_param].min;
 
-    delay(200); // to avoid rapid change of selection
+    if (postDelay)
+      delay(200); // to avoid rapid change of selection
     _update_display = true;
   }
 }
-void ButtonC()
+void ButtonC(bool postDelay)
 {
   Serial.println("Button C");
 
@@ -592,11 +611,12 @@ void ButtonC()
     _selected_param -= 1; // iterate by index of parameter
     if (_selected_param < 0)
       _selected_param = NUM_PARAM - 1;
-    delay(300); // to avoid rapid change of selection
+    if (postDelay)
+      delay(300); // to avoid rapid change of selection
     _update_display = true;
   }
 }
-void ButtonD()
+void ButtonD(bool postDelay)
 {
   Serial.println("Button D");
 
@@ -606,7 +626,8 @@ void ButtonD()
     if (param[_selected_param].value < param[_selected_param].min)
       param[_selected_param].value = param[_selected_param].max;
 
-    delay(200); // to avoid rapid change of selection
+    if (postDelay)
+      delay(200); // to avoid rapid change of selection
     _update_display = true;
 
   }
@@ -614,29 +635,15 @@ void ButtonD()
 
 // Handle the Start button only, for the sake of speed
 void RunButtons()
-{   
-  byte pressed_button;
-  if(_state == ST_ONRUN)
-  {
-      if (digitalRead(buttonPinS) == LOW) // Change to direct port load
-        ButtonS();
-      else
-        ButtonNon();
-  }
-}
-
-// Debouncng of pressed button
-// Use it only for select buttons !!!
-// As it introduces a delay of 5 ms
-bool IsButtonLow(const int button)
 {
-  bool current = digitalRead(button);
-  if (current == LOW)
+  byte pressed_button;
+  if (_state == ST_ONRUN)
   {
-    delay(5);
-    current = digitalRead(button);
+    if (digitalRead(buttonPinS) == LOW) // Change to direct port load
+      ButtonS();
+    else
+      ButtonNon();
   }
-  return current;
 }
 
 // Isolate select buttons in case we change to substitute them with select encoder
@@ -646,7 +653,6 @@ void SelectButtons()
   { // Handle all buttons
     byte pressed_button;
     if (digitalRead(buttonPinS) == LOW)
-    //if (IsButtonLow(buttonPinS))
       pressed_button = bt_S;
     else if (digitalRead(buttonPinP) == LOW)
       pressed_button = bt_P;
@@ -673,16 +679,16 @@ void SelectButtons()
         ButtonP();
         break;
       case bt_A: // Select-Up
-        ButtonA();
+        ButtonA(true);
         break;
       case bt_C: // Select-Down
-        ButtonC();
+        ButtonC(true);
         break;
       case bt_B: // Left
-        ButtonB();
+        ButtonB(true);
         break;
       case bt_D: // Right
-        ButtonD();
+        ButtonD(true);
         break;
       default:
         break;
@@ -699,38 +705,36 @@ void loop()
   Display();
   SelectButtons();
   RunButtons();
+  RotaryMenu();
   //MotorTest();
   Run_Modes();
-
-  rotaryMenu();
-
 }
 
 
-void rotaryMenu() { //This handles the bulk of the menu functions without needing to install/include/compile a menu library
+void RotaryMenu() { //This handles the bulk of the menu functions without needing to install/include/compile a menu library
+  // No modes selection if not in SELECT state
   if (_state != ST_SELECT)
     return;
-  
 
-  byte buttonState = digitalRead (buttonPinEnc); 
-  if (buttonState != oldEncButtonState){
-    if (millis () - buttonPressTime >= debounceTime){ // debounce
-      buttonPressTime = millis ();  // when we closed the switch 
-      oldEncButtonState =  buttonState;  // remember for next time 
-      if (buttonState == LOW){
+  byte buttonState = digitalRead (buttonPinEnc);
+  if (buttonState != oldEncButtonState) {
+    if (millis () - buttonPressTime >= debounceTime) { // debounce
+      buttonPressTime = millis ();  // when we closed the switch
+      oldEncButtonState =  buttonState;  // remember for next time
+      if (buttonState == LOW) {
         Serial.println ("Button closed"); // DEBUGGING: print that button has been closed
         buttonPressed = 1;
       }
       else {
         Serial.println ("Button opened"); // DEBUGGING: print that button has been opened
-        buttonPressed = 0;  
-      }  
+        buttonPressed = 0;
+      }
     }  // end if debounce time up
   } // end of state change
-  
-  if(buttonPressed)
+
+  if (buttonPressed)
   { // Tougggle menu level
-    if(_MenuLevel == MENU_TOP) _MenuLevel = MENU_BOT;
+    if (_MenuLevel == MENU_TOP) _MenuLevel = MENU_BOT;
     else _MenuLevel = MENU_TOP;
     buttonPressed = 0; // reset the button status so one press results in one action
     _update_display = true;
@@ -738,59 +742,59 @@ void rotaryMenu() { //This handles the bulk of the menu functions without needin
   }
 
 
-  if(oldEncPos != encoderPos) {
-   Serial.println(encoderPos);// DEBUGGING. Sometimes the serial monitor may show a value just outside modeMax due to this function. The menu shouldn't be affected.
+  if (oldEncPos != encoderPos) {
+    Serial.println(encoderPos);// DEBUGGING. Sometimes the serial monitor may show a value just outside modeMax due to this function. The menu shouldn't be affected.
 
     switch (_MenuLevel)
     {
       case MENU_TOP: // Top menu level
-        if(encoderPos > oldEncPos) {
-          ButtonA();
+        if (encoderPos > oldEncPos) {
+          ButtonA(false);
         }
-        if(encoderPos < oldEncPos) {
-          ButtonC();
+        if (encoderPos < oldEncPos) {
+          ButtonC(false);
         }
         break;
       case MENU_BOT: // Parameter menu level
-        if(encoderPos > oldEncPos) {
-          ButtonB();
+        if (encoderPos > oldEncPos) {
+          ButtonB(false);
         }
-        if(encoderPos < oldEncPos) {
-          ButtonD();
+        if (encoderPos < oldEncPos) {
+          ButtonD(false);
         }
         break;
       default:
-          break;
-    }    
+        break;
+    }
     oldEncPos = encoderPos;
     UpdateGlobalSettings();
   }
 }
 
 
-#if defined(ARDUINO_AVR_UNO)
-  #define PORT_ENC PIND
-  #define PORT_ENC_MSK 0xC
-  #define PIN23_MSK B00001100
-  #define PIN_2_MSK B00000100
-  #define PIN_3_MSK B00001000
+#if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO)
+#define PORT_ENC PIND
+#define PORT_ENC_MSK 0xC
+#define PIN23_MSK B00001100
+#define PIN_2_MSK B00000100
+#define PIN_3_MSK B00001000
 #elif defined(ARDUINO_AVR_MEGA2560)
-  #define PORT_ENC PINE
-  #define PORT_ENC_MSK 0x30
-  #define PIN23_MSK B00110000
-  #define PIN_2_MSK B00010000
-  #define PIN_3_MSK B00100000
+#define PORT_ENC PINE
+#define PORT_ENC_MSK 0x30
+#define PIN23_MSK B00110000
+#define PIN_2_MSK B00010000
+#define PIN_3_MSK B00100000
 #elif defined(ARDUINO_SAM_DUE)
 //Due specific code
 #else
-  #error Unsupported hardware
+#error Unsupported hardware
 #endif
 
 //Rotary encoder interrupt service routine for one encoder pin
-void EncPinA_ISR(){
+void EncPinA_ISR() {
   cli(); //stop interrupts happening before we read pin values
   readingEnc = PORT_ENC & PORT_ENC_MSK; // read all eight pin values then strip away all but pinA and pinB's values
-  if(readingEnc == PIN23_MSK && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+  if (readingEnc == PIN23_MSK && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
     encoderPos --; //decrement the encoder's position count
     bFlag = 0; //reset flags for the next turn
     aFlag = 0; //reset flags for the next turn
@@ -800,7 +804,7 @@ void EncPinA_ISR(){
 }
 
 //Rotary encoder interrupt service routine for the other encoder pin
-void EncPinB_ISR(){
+void EncPinB_ISR() {
   cli(); //stop interrupts happening before we read pin values
   readingEnc = PINE & 0x30; //read all eight pin values then strip away all but pinA and pinB's values
   if (readingEnc == PIN23_MSK && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
