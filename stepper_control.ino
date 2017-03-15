@@ -3,6 +3,7 @@
 // v.0.2
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
+//
 // The Interrupt-based Rotary Encoder Menu Sketch
 // by Simon Merrett, based on insight from Oleg Mazurov, Nick Gammon, rt and Steve Spence, and code from Nick Gammon
 
@@ -255,34 +256,80 @@ boolean buttonPressed = 0; // a flag variable
 #define MENU_BOT 1
 byte _MenuLevel = MENU_TOP; // With two levels of menu it can be 0 or 1
 
+//==============================================================================
+// Interupt pin definitiones for direct port access
+#if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO)
+#define PORT_ENC PIND
+#define PORT_ENC_MSK 0xC
+#define PIN23_MSK B00001100
+#define PIN_2_MSK B00000100
+#define PIN_3_MSK B00001000
+#elif defined(ARDUINO_AVR_MEGA2560)
+#define PORT_ENC PINE
+#define PORT_ENC_MSK 0x30
+#define PIN23_MSK B00110000
+#define PIN_2_MSK B00010000
+#define PIN_3_MSK B00100000
+#elif defined(ARDUINO_SAM_DUE)
+//Due specific code
+#else
+#error Unsupported hardware
+#endif
+
+//==============================================================================
+//Rotary encoder interrupt service routine for one encoder pin
+void EncPinA_ISR() {
+  cli(); //stop interrupts happening before we read pin values
+  readingEnc = PORT_ENC & PORT_ENC_MSK; // read all eight pin values then strip away all but pinA and pinB's values
+  if (readingEnc == PIN23_MSK && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+    encoderPos --; //decrement the encoder's position count
+    bFlag = 0; //reset flags for the next turn
+    aFlag = 0; //reset flags for the next turn
+  }
+  else if (readingEnc == PIN_2_MSK) bFlag = 1; //signal that we're expecting pinB to signal the transition to detent from free rotation
+  sei(); //restart interrupts
+}
+
+//Rotary encoder interrupt service routine for the other encoder pin
+void EncPinB_ISR() {
+  cli(); //stop interrupts happening before we read pin values
+  readingEnc = PORT_ENC & PORT_ENC_MSK; //read all eight pin values then strip away all but pinA and pinB's values
+  if (readingEnc == PIN23_MSK && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
+    encoderPos ++; //increment the encoder's position count
+    bFlag = 0; //reset flags for the next turn
+    aFlag = 0; //reset flags for the next turn
+  }
+  else if (readingEnc == PIN_3_MSK) aFlag = 1; //signal that we're expecting pinA to signal the transition to detent from free rotation
+  sei(); //restart interrupts
+}
 
 
 void setup()
 {
   Serial.begin(9600);
 
-  //Rotary encoder section of setup
+  // Rotary encoder section of setup
   pinMode(EncPinA, INPUT_PULLUP); // set pinA as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
   pinMode(EncPinB, INPUT_PULLUP); // set pinB as an input, pulled HIGH to the logic voltage (5V or 3.3V for most cases)
-  attachInterrupt(digitalPinToInterrupt(EncPinA), EncPinA_ISR, RISING); // set an interrupt on PinA, looking for a rising edge signal and executing the "PinA" Interrupt Service Routine (below)
-  attachInterrupt(digitalPinToInterrupt(EncPinB), EncPinB_ISR, RISING); // set an interrupt on PinB, looking for a rising edge signal and executing the "PinB" Interrupt Service Routine (below)
+  attachInterrupt(digitalPinToInterrupt(EncPinA), EncPinA_ISR, RISING); // set an interrupt on EncPinA, looking for a rising edge signal and executing the "EncPinA_ISR" Interrupt Service Routine (below)
+  attachInterrupt(digitalPinToInterrupt(EncPinB), EncPinB_ISR, RISING); // set an interrupt on EncPinB, looking for a rising edge signal and executing the "EncPinB_ISR" Interrupt Service Routine (below)
   // button section of setup
   pinMode (buttonPinEnc, INPUT_PULLUP); // setup the button pin
 
-  //============================================================
-
+  //=================================
   pinMode(buttonPinA, INPUT_PULLUP);
   pinMode(buttonPinB, INPUT_PULLUP);
   pinMode(buttonPinC, INPUT_PULLUP);
   pinMode(buttonPinD, INPUT_PULLUP);
   pinMode(buttonPinS, INPUT_PULLUP);
   pinMode(buttonPinP, INPUT_PULLUP);
-  //=============================================================
+  //=================================
   pinMode(stepperDirPin, OUTPUT);
   pinMode(stepperStepPin, OUTPUT);
   pinMode(stepperEnaPin, OUTPUT);
 
-
+  //=================================
+  // LCD setup
   lcd.begin(16, 2);
   lcd.setRGB(colorR, colorG, colorB);
 
@@ -374,7 +421,7 @@ float Lin2StepSpeed(float linear_speed) /// make it inlined
   return ( linear_speed * STEPS_PER_ROTATION * 1000 ) / (PULLEY_DIA * PI * 60);
 }
 
-// Call this funciton when changed some settings using buttons
+// Call this funciton when changed some settings using buttons/encoder
 // Parameters are copied to global settings
 void UpdateGlobalSettings()
 {
@@ -700,16 +747,6 @@ void SelectButtons()
   }
 }
 
-void loop()
-{
-  Display();
-  SelectButtons();
-  RunButtons();
-  RotaryMenu();
-  //MotorTest();
-  Run_Modes();
-}
-
 
 void RotaryMenu() { //This handles the bulk of the menu functions without needing to install/include/compile a menu library
   // No modes selection if not in SELECT state
@@ -772,46 +809,12 @@ void RotaryMenu() { //This handles the bulk of the menu functions without needin
 }
 
 
-#if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO)
-#define PORT_ENC PIND
-#define PORT_ENC_MSK 0xC
-#define PIN23_MSK B00001100
-#define PIN_2_MSK B00000100
-#define PIN_3_MSK B00001000
-#elif defined(ARDUINO_AVR_MEGA2560)
-#define PORT_ENC PINE
-#define PORT_ENC_MSK 0x30
-#define PIN23_MSK B00110000
-#define PIN_2_MSK B00010000
-#define PIN_3_MSK B00100000
-#elif defined(ARDUINO_SAM_DUE)
-//Due specific code
-#else
-#error Unsupported hardware
-#endif
-
-//Rotary encoder interrupt service routine for one encoder pin
-void EncPinA_ISR() {
-  cli(); //stop interrupts happening before we read pin values
-  readingEnc = PORT_ENC & PORT_ENC_MSK; // read all eight pin values then strip away all but pinA and pinB's values
-  if (readingEnc == PIN23_MSK && aFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos --; //decrement the encoder's position count
-    bFlag = 0; //reset flags for the next turn
-    aFlag = 0; //reset flags for the next turn
-  }
-  else if (readingEnc == PIN_2_MSK) bFlag = 1; //signal that we're expecting pinB to signal the transition to detent from free rotation
-  sei(); //restart interrupts
-}
-
-//Rotary encoder interrupt service routine for the other encoder pin
-void EncPinB_ISR() {
-  cli(); //stop interrupts happening before we read pin values
-  readingEnc = PINE & 0x30; //read all eight pin values then strip away all but pinA and pinB's values
-  if (readingEnc == PIN23_MSK && bFlag) { //check that we have both pins at detent (HIGH) and that we are expecting detent on this pin's rising edge
-    encoderPos ++; //increment the encoder's position count
-    bFlag = 0; //reset flags for the next turn
-    aFlag = 0; //reset flags for the next turn
-  }
-  else if (readingEnc == PIN_3_MSK) aFlag = 1; //signal that we're expecting pinA to signal the transition to detent from free rotation
-  sei(); //restart interrupts
+void loop()
+{
+  Display();
+  SelectButtons();
+  RunButtons();
+  RotaryMenu();
+  //MotorTest();
+  Run_Modes();
 }
