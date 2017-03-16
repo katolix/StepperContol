@@ -74,9 +74,9 @@ const int stepperEnaPin = 13; // Stepper driver ENA pin
 
 // Define a stepper and the pins it will use
 //AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
-//AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
+AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
 
-AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
+//AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
 
 //==============================================================================
 // Define an LCD screen
@@ -403,8 +403,8 @@ void setup()
 
   // Populating run mode with actions (in order of appearance in the cycle)
   g_mode.AddAction(&fw_feed);
-  g_mode.AddAction(&ps_feed);
   g_mode.AddAction(&bw_feed);
+  g_mode.AddAction(&ps_feed);
 
   _state == ST_SELECT; // Set in select state
 
@@ -552,11 +552,13 @@ void Display()
 void StopCycle()
 {
   // Stop motor with decceleration
-  stepper.DeccelFromSpeed(_MotorAccelTime);
-  Serial.println("=====================");
-  /// Maybe need to check if the motor is in FW feed
-  while (stepper.run())
-    ;
+  if( stepper.DeccelFromSpeed(_MotorAccelTime) )
+  {
+    Serial.println("=====================");
+    /// Maybe need to check if the motor is in FW feed
+    while (stepper.run())
+      ;
+  }
   // Change state to mode select
   _state = ST_SELECT;
   // Stop timer and reset it's couting register
