@@ -1,6 +1,6 @@
 // Copyright (C) 2017 Vladimir Tsymbal
 // e-mail: vladimir.tsymbal@web.de
-// v.0.2
+// v.0.3
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
 //
@@ -11,11 +11,11 @@
 #include <rgb_lcd.h>
 #include <Wire.h>
 #include <AccelStepper.h>
-
+#include <EEPROM.h>
 
 // User defined parameters
 //===================================================================================================//
-//#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
+#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
 
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
@@ -74,9 +74,9 @@ const int stepperEnaPin = 13; // Stepper driver ENA pin
 
 // Define a stepper and the pins it will use
 //AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
-AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
+//AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
 
-//AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
+AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
 
 //==============================================================================
 // Define an LCD screen
@@ -147,6 +147,7 @@ typedef struct params
   char name[8];
 } Param;
 #define NUM_PARAM 6
+#define MAGIC_NUMBER 74
 
 int _selected_param = 0; // int type in order to be able to decrement a param from 0
 Param param[NUM_PARAM];
@@ -154,6 +155,45 @@ const Param* GetParam(byte id) {
   for (byte i = 0; i < NUM_PARAM; i++)  {
     if ( param[i].id == id )
       return &param[i];
+  }
+}
+void StoreParams(){
+  int eeAddress = 0;
+  EEPROM.put(eeAddress, MAGIC_NUMBER);
+  eeAddress++;
+  
+  for (byte i = 0; i < NUM_PARAM; i++)  {
+    EEPROM.put(eeAddress, param[i]);
+    eeAddress += sizeof(Param);
+  }
+}
+void LoadParams(){
+  int eeAddress = 0;
+  byte number;
+  EEPROM.get( eeAddress, number);
+  eeAddress++;
+  
+  for (byte i = 0; i < NUM_PARAM; i++){
+    EEPROM.get( eeAddress, param[i]);
+    eeAddress += sizeof(Param);
+  }
+} 
+void PrintParams()
+{
+  for (byte i = 0; i < NUM_PARAM; i++){
+  Serial.println("-----");
+  Serial.print("name: ");
+  Serial.println(param[i].name);
+  Serial.print("id: ");
+  Serial.println(param[i].id);
+  Serial.print("value: ");
+  Serial.println(param[i].value);
+  Serial.print("inc: ");
+  Serial.println(param[i].inc);
+  Serial.print("max: ");
+  Serial.println(param[i].max);
+  Serial.print("min: ");
+  Serial.println(param[i].min);
   }
 }
 
@@ -244,7 +284,8 @@ volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on 
 volatile byte encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
 volatile byte oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
 volatile byte readingEnc = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
-const byte MAX_ENC_NUM = 255;
+const byte MAX_ENC_POS = 255; // as the encoderPos type is byte
+
 // Button reading, including debounce without delay function declarations
 byte oldEncButtonState = HIGH;  // assume switch open because of pull-up resistor
 
@@ -342,59 +383,71 @@ void setup()
   bw_feed.SetFunction(&StepperRunSpeed);
   ps_feed.SetFunction(&StepperNoRun);
 
-  // Setting parameters for display
+  // Setting parameters
 
-#ifdef LIN_SPEED
-  strcpy( param[par_speed].name, "Speed");
-  param[par_speed].id = par_speed;
-  param[par_speed].value = MAX_LIN_SPEED;
-  param[par_speed].min = MIN_LIN_SPEED;
-  param[par_speed].max = MAX_LIN_SPEED;
-  param[par_speed].inc = INC_LIN_SPEED;
-#else
-  strcpy( param[par_speed].name, "Speed");
-  param[par_speed].id = par_speed;
-  param[par_speed].value = MAX_MOTOR_SPEED;
-  param[par_speed].min = MIN_MOTOR_SPEED;
-  param[par_speed].max = MAX_MOTOR_SPEED;
-  param[par_speed].inc = INC_MOTOR_SPEED;
-#endif //LIN_SPEED
+  // Check wheather we have to load default parameters
+  int eeAddress = 0;
+  byte number;
+  EEPROM.get( eeAddress, number);
+  int state = digitalRead (buttonPinEnc);
 
-  strcpy( param[par_fwtime].name, "FW time");
-  param[par_fwtime].id = par_fwtime;
-  param[par_fwtime].value = (float)fw_feed.time_period / 1000;
-  param[par_fwtime].max = MAX_FW_TIME;
-  param[par_fwtime].min = MIN_FW_TIME;
-  param[par_fwtime].inc = INC_FW_TIME;
-
-  strcpy( param[par_pause].name, "Pause");
-  param[par_pause].id = par_pause;
-  param[par_pause].value = (float)ps_feed.time_period / 1000;
-  param[par_pause].max = MAX_PAUSE;
-  param[par_pause].min = MIN_PAUSE;
-  param[par_pause].inc = INC_PAUSE;
-
-  strcpy( param[par_bwtime].name, "BW time");
-  param[par_bwtime].id = par_bwtime;
-  param[par_bwtime].value = (float)bw_feed.time_period / 1000;
-  param[par_bwtime].max = MAX_BW_TIME;
-  param[par_bwtime].min = MIN_BW_TIME;
-  param[par_bwtime].inc = INC_BW_TIME;
-
-  strcpy( param[par_accel].name, "Accel");
-  param[par_accel].id = par_accel;
-  param[par_accel].value = MIN_ACCEL_TIME;
-  param[par_accel].max = MAX_ACCEL_TIME;
-  param[par_accel].min = MIN_ACCEL_TIME;
-  param[par_accel].inc = INC_ACCEL_TIME;
-
-  strcpy( param[par_stmode].name, "Mode");
-  param[par_stmode].value = MIN_RUN_MODE; // First mode
-  param[par_stmode].id = par_stmode;
-  param[par_stmode].min = MIN_RUN_MODE;
-  param[par_stmode].max = MAX_RUN_MODE;
-  param[par_stmode].inc = INC_RUN_MODE;
-
+  if(state == LOW || number != MAGIC_NUMBER)
+  {
+  #ifdef LIN_SPEED
+    strcpy( param[par_speed].name, "Speed");
+    param[par_speed].id = par_speed;
+    param[par_speed].value = MAX_LIN_SPEED;
+    param[par_speed].min = MIN_LIN_SPEED;
+    param[par_speed].max = MAX_LIN_SPEED;
+    param[par_speed].inc = INC_LIN_SPEED;
+  #else
+    strcpy( param[par_speed].name, "Speed");
+    param[par_speed].id = par_speed;
+    param[par_speed].value = MAX_MOTOR_SPEED;
+    param[par_speed].min = MIN_MOTOR_SPEED;
+    param[par_speed].max = MAX_MOTOR_SPEED;
+    param[par_speed].inc = INC_MOTOR_SPEED;
+  #endif //LIN_SPEED
+  
+    strcpy( param[par_fwtime].name, "FW time");
+    param[par_fwtime].id = par_fwtime;
+    param[par_fwtime].value = (float)fw_feed.time_period / 1000;
+    param[par_fwtime].max = MAX_FW_TIME;
+    param[par_fwtime].min = MIN_FW_TIME;
+    param[par_fwtime].inc = INC_FW_TIME;
+  
+    strcpy( param[par_pause].name, "Pause");
+    param[par_pause].id = par_pause;
+    param[par_pause].value = (float)ps_feed.time_period / 1000;
+    param[par_pause].max = MAX_PAUSE;
+    param[par_pause].min = MIN_PAUSE;
+    param[par_pause].inc = INC_PAUSE;
+  
+    strcpy( param[par_bwtime].name, "BW time");
+    param[par_bwtime].id = par_bwtime;
+    param[par_bwtime].value = (float)bw_feed.time_period / 1000;
+    param[par_bwtime].max = MAX_BW_TIME;
+    param[par_bwtime].min = MIN_BW_TIME;
+    param[par_bwtime].inc = INC_BW_TIME;
+  
+    strcpy( param[par_accel].name, "Accel");
+    param[par_accel].id = par_accel;
+    param[par_accel].value = MIN_ACCEL_TIME;
+    param[par_accel].max = MAX_ACCEL_TIME;
+    param[par_accel].min = MIN_ACCEL_TIME;
+    param[par_accel].inc = INC_ACCEL_TIME;
+  
+    strcpy( param[par_stmode].name, "Mode");
+    param[par_stmode].value = MIN_RUN_MODE; // First mode
+    param[par_stmode].id = par_stmode;
+    param[par_stmode].min = MIN_RUN_MODE;
+    param[par_stmode].max = MAX_RUN_MODE;
+    param[par_stmode].inc = INC_RUN_MODE;
+  }
+  else
+    LoadParams(); 
+  PrintParams();// for DEBUGGING
+    
 
   // Initializing Timer1, by default 1 sec
   Timer1.initialize(1000000);
@@ -778,19 +831,19 @@ void RotaryMenu() { //This handles the bulk of the menu functions without needin
     buttonPressed = 0; // reset the button status so one press results in one action
     _update_display = true;
     UpdateGlobalSettings();
+    // Store params to eeprom here, once encoder button is pressed
+    StoreParams();
   }
 
 
   if (oldEncPos != encoderPos) {
     Serial.println(encoderPos);// DEBUGGING. Sometimes the serial monitor may show a value just outside modeMax due to this function. The menu shouldn't be affected.
-    // Incremental transition, e.g. from 255 to 0
-    bool INC_TRANS = false;
-    if(oldEncPos == MAX_ENC_NUM && encoderPos == 0) INC_TRANS = true;
-    // Decremental transitoin, e.g. from 0 to 255
-    bool DEC_TRANS = false;
-    if(oldEncPos == 0 && encoderPos == MAX_ENC_NUM) DEC_TRANS = true;
-    
-    
+  
+  bool INC_TRANS = false; // Incremental transition, e.g. from 255 to 0
+  if (oldEncPos == MAX_ENC_POS && encoderPos == 0) INC_TRANS = true;
+  bool DEC_TRANS = false; // Decremental transition, e.g. from 0 to 255
+  if (oldEncPos == 0 && encoderPos == MAX_ENC_POS) DEC_TRANS = true;
+
     switch (_MenuLevel)
     {
       case MENU_TOP: // Top menu level
