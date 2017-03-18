@@ -244,7 +244,7 @@ volatile byte bFlag = 0; // let's us know when we're expecting a rising edge on 
 volatile byte encoderPos = 0; //this variable stores our current value of encoder position. Change to int or uin16_t instead of byte if you want to record a larger range than 0-255
 volatile byte oldEncPos = 0; //stores the last encoder position value so we can compare to the current reading and see if it has changed (so we know when to print to the serial monitor)
 volatile byte readingEnc = 0; //somewhere to store the direct values we read from our interrupt pins before checking to see if we have moved a whole detent
-
+const byte MAX_ENC_NUM = 255;
 // Button reading, including debounce without delay function declarations
 byte oldEncButtonState = HIGH;  // assume switch open because of pull-up resistor
 
@@ -783,22 +783,29 @@ void RotaryMenu() { //This handles the bulk of the menu functions without needin
 
   if (oldEncPos != encoderPos) {
     Serial.println(encoderPos);// DEBUGGING. Sometimes the serial monitor may show a value just outside modeMax due to this function. The menu shouldn't be affected.
-
+    // Incremental transition, e.g. from 255 to 0
+    bool INC_TRANS = false;
+    if(oldEncPos == MAX_ENC_NUM && encoderPos == 0) INC_TRANS = true;
+    // Decremental transitoin, e.g. from 0 to 255
+    bool DEC_TRANS = false;
+    if(oldEncPos == 0 && encoderPos == MAX_ENC_NUM) DEC_TRANS = true;
+    
+    
     switch (_MenuLevel)
     {
       case MENU_TOP: // Top menu level
-        if (encoderPos > oldEncPos) {
+        if (((encoderPos > oldEncPos) && !DEC_TRANS ) || INC_TRANS) {
           ButtonA(false);
         }
-        if (encoderPos < oldEncPos) {
+        if (((encoderPos < oldEncPos) && !INC_TRANS ) || DEC_TRANS) {
           ButtonC(false);
         }
         break;
-      case MENU_BOT: // Parameter menu level
-        if (encoderPos > oldEncPos) {
+      case MENU_BOT: // Bottom (Parameter) menu level
+        if (((encoderPos > oldEncPos) && !DEC_TRANS ) || INC_TRANS) {
           ButtonB(false);
         }
-        if (encoderPos < oldEncPos) {
+        if (((encoderPos < oldEncPos) && !INC_TRANS ) || DEC_TRANS) {
           ButtonD(false);
         }
         break;
