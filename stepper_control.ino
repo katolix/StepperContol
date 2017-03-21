@@ -1,6 +1,6 @@
 // Copyright (C) 2017 Vladimir Tsymbal
 // e-mail: vladimir.tsymbal@web.de
-// v.0.3
+// v.0.4
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
 //
@@ -56,7 +56,7 @@
 
 const int EncPinA = 2; // Encoder channel A interrupt pin
 const int EncPinB = 3; // Encoder channel B interrupt pin
-const int buttonPinEnc = 4; // Encoder push button pin
+const int buttonPinE = 4; // Encoder push button pin
 
 const int buttonPinS = 5; // Start button pin
 const int buttonPinP = 6; // Feed button pin
@@ -287,11 +287,12 @@ volatile byte readingEnc = 0; //somewhere to store the direct values we read fro
 const byte MAX_ENC_POS = 255; // as the encoderPos type is byte
 
 // Button reading, including debounce without delay function declarations
-byte oldEncButtonState = HIGH;  // assume switch open because of pull-up resistor
-
+byte _buttonOldState_E = HIGH;  // assume switch open because of pull-up resistor
+byte _buttonOldState_S = HIGH;  // assume switch open because of pull-up resistor
+unsigned long _buttonPressTime_E;  // when the switch last changed state
+unsigned long _buttonPressTime_S;  // when the switch last changed state
+boolean _buttonPressed_E = 0; // global condition of switch
 const unsigned long debounceTime = 10;  // milliseconds
-unsigned long buttonPressTime;  // when the switch last changed state
-boolean buttonPressed = 0; // a flag variable
 
 #define MENU_TOP 0
 #define MENU_BOT 1
@@ -355,7 +356,7 @@ void setup()
   attachInterrupt(digitalPinToInterrupt(EncPinA), EncPinA_ISR, RISING); // set an interrupt on EncPinA, looking for a rising edge signal and executing the "EncPinA_ISR" Interrupt Service Routine (below)
   attachInterrupt(digitalPinToInterrupt(EncPinB), EncPinB_ISR, RISING); // set an interrupt on EncPinB, looking for a rising edge signal and executing the "EncPinB_ISR" Interrupt Service Routine (below)
   // button section of setup
-  pinMode (buttonPinEnc, INPUT_PULLUP); // setup the button pin
+  pinMode (buttonPinE, INPUT_PULLUP); // setup the button pin
 
   //=================================
   pinMode(buttonPinA, INPUT_PULLUP);
@@ -389,7 +390,7 @@ void setup()
   int eeAddress = 0;
   byte number;
   EEPROM.get( eeAddress, number);
-  int state = digitalRead (buttonPinEnc);
+  int state = digitalRead (buttonPinE);
 
   if(state == LOW || number != MAGIC_NUMBER)
   {
@@ -619,51 +620,40 @@ void StopCycle()
   TCNT1 = 1;
 }
 
-void ButtonNon()
+void ButtonS(bool buttonPressed)
 {
   if (_state == ST_ONRUN)
   {
     switch (_start_mode)
     {
-      case st_4T:
-        // nothing to do, it's running
+      case st_2T: 
+        if (buttonPressed)
+          // It's strange that we are here - S button cannot be pressed again without exiting ST_ONRUN
+          // But there is nothing to do, it's already running. Just sending a warning.
+          Serial.println("We should not be here!!! Wrong button press");
+        else { // Button released. It's a stop command
+          StopCycle();
+          _update_display = true;}
         break;
-      case st_2T:
-        StopCycle();
-        _update_display = true;
-        break;
-      default:
-        Serial.print("WARNING!!! We should not get in to here");
-        Serial.println("");
-        break;
-    }
-  }
-}
-void ButtonS()
-{
-  if (_state == ST_ONRUN)
-  {
-    switch (_start_mode)
-    {
-      case st_2T: //  nothing to do, it's already running
-        break;
-      case st_4T: // stop cycle
-        Serial.println("Button S - stop");
-        StopCycle();
-        _update_display = true;
+      case st_4T: 
+        if (buttonPressed) {// It's a stop command
+          StopCycle();
+          _update_display = true;}
+        // else, there is nothisn to do
         break;
       default:
+        Serial.println("We should not be here!!! Wrong start mode.");
         break;
     }
   }
   else // _state == ST_SELECT
   {
-    Serial.println("Button S - start");
-
-    UpdateStartSettings();
-    _state = ST_ONRUN; // Enable running
-    _update_display = true;
-    delay(200); // to avoid immediate stop in 4T mode
+    if (buttonPressed)
+    {
+      UpdateStartSettings();
+      _state = ST_ONRUN; // Enable running
+      _update_display = true;
+    }
   }
 }
 
@@ -735,18 +725,26 @@ void ButtonD(bool postDelay)
   }
 }
 
-// Handle the Start button only, for the sake of speed
-void RunButtons()
+// Handle buttons that start an action
+void StartButtons()
 {
-  byte pressed_button;
-  if (_state == ST_ONRUN)
-  {
-    if (digitalRead(buttonPinS) == LOW) // Change to direct port load
-      ButtonS();
-    else
-      ButtonNon();
-  }
+  byte buttonState = digitalRead (buttonPinS);
+  if (buttonState != _buttonOldState_S) {
+    if (millis () - _buttonPressTime_S >= debounceTime) { // debounce
+      _buttonPressTime_S = millis ();  // when we closed the switch
+      _buttonOldState_S =  buttonState;  // remember for next time
+      if (buttonState == LOW) {
+        Serial.println ("button S closed"); // DEBUGGING: print that button has been closed
+        ButtonS(true);
+      }
+      else {
+        Serial.println ("button S opened"); // DEBUGGING: print that button has been opened
+        ButtonS(false);
+      }
+    }  // end if debounce time up
+  } // end of state change
 }
+
 
 // Isolate select buttons in case we change to substitute them with select encoder
 void SelectButtons()
@@ -754,9 +752,9 @@ void SelectButtons()
   if (_state != ST_ONRUN)
   { // Handle all buttons
     byte pressed_button;
-    if (digitalRead(buttonPinS) == LOW)
-      pressed_button = bt_S;
-    else if (digitalRead(buttonPinP) == LOW)
+/*    if (digitalRead(buttonPinS) == LOW)
+      pressed_button = bt_S;*/
+    if (digitalRead(buttonPinP) == LOW)
       pressed_button = bt_P;
     else if (digitalRead(buttonPinA) == LOW)
       pressed_button = bt_A;
@@ -771,12 +769,6 @@ void SelectButtons()
 
     switch (pressed_button)
     {
-      case bt_Non: // No buttons pressed
-        ButtonNon();
-        break;
-      case bt_S: // Start
-        ButtonS();
-        break;
       case bt_P: // Load
         ButtonP();
         break;
@@ -802,33 +794,32 @@ void SelectButtons()
   }
 }
 
-
 void RotaryMenu() { //This handles the bulk of the menu functions without needing to install/include/compile a menu library
   // No modes selection if not in SELECT state
   if (_state != ST_SELECT)
     return;
 
-  byte buttonState = digitalRead (buttonPinEnc);
-  if (buttonState != oldEncButtonState) {
-    if (millis () - buttonPressTime >= debounceTime) { // debounce
-      buttonPressTime = millis ();  // when we closed the switch
-      oldEncButtonState =  buttonState;  // remember for next time
+  byte buttonState = digitalRead (buttonPinE);
+  if (buttonState != _buttonOldState_E) {
+    if (millis () - _buttonPressTime_E >= debounceTime) { // debounce
+      _buttonPressTime_E = millis ();  // when we closed the switch
+      _buttonOldState_E =  buttonState;  // remember for next time
       if (buttonState == LOW) {
         Serial.println ("Button closed"); // DEBUGGING: print that button has been closed
-        buttonPressed = 1;
+        _buttonPressed_E = 1;
       }
       else {
         Serial.println ("Button opened"); // DEBUGGING: print that button has been opened
-        buttonPressed = 0;
+        _buttonPressed_E = 0;
       }
     }  // end if debounce time up
   } // end of state change
 
-  if (buttonPressed)
+  if (_buttonPressed_E)
   { // Tougggle menu level
     if (_MenuLevel == MENU_TOP) _MenuLevel = MENU_BOT;
     else _MenuLevel = MENU_TOP;
-    buttonPressed = 0; // reset the button status so one press results in one action
+    _buttonPressed_E = 0; // reset the button status so one press results in one action
     _update_display = true;
     UpdateGlobalSettings();
     // Store params to eeprom here, once encoder button is pressed
@@ -875,7 +866,7 @@ void loop()
 {
   Display();
   SelectButtons();
-  RunButtons();
+  StartButtons();
   RotaryMenu();
   //MotorTest();
   Run_Modes();
