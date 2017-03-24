@@ -1,6 +1,6 @@
 // Copyright (C) 2017 Vladimir Tsymbal
 // e-mail: vladimir.tsymbal@web.de
-// v.0.4
+// v.0.5
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
 //
@@ -15,33 +15,36 @@
 
 // User defined parameters
 //===================================================================================================//
-#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
+//#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
 
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
 #define PULLEY_DIA 30 // Diameter of pulley, mm
 
+#define MAX_FEED_SPEED 15.0 // Feed speed m/min
+#define ACCEL_FEED_TIME 1.0 // Accel feed time, s
+
 #ifdef LIN_SPEED
-#define MAX_LIN_SPEED 10 // Maximum linear speed, m/min
+#define MAX_LIN_SPEED 15 // Maximum linear speed, m/min
 #define MIN_LIN_SPEED 0 // Minimum linear speed, m/min
-#define INC_LIN_SPEED 0.1 // Increment linear speed, m/min
+#define INC_LIN_SPEED 0.5 // Increment linear speed, m/min
 #else
 #define MAX_MOTOR_SPEED 1000 // Maximum speed, steps/s
 #define MIN_MOTOR_SPEED 100 // Minimum speed, steps/s
-#define INC_MOTOR_SPEED 1 // Minimum speed, steps/s
+#define INC_MOTOR_SPEED 10 // Minimum speed, steps/s
 #endif // LIN_SPEED
 
 #define MAX_ACCEL_TIME 5 // Maximum time for acceleration, s
 #define MIN_ACCEL_TIME 1 // Minimum time for acceleration, s
 #define INC_ACCEL_TIME 1 // Increment time for acceleration, s
 
-#define MAX_FW_TIME 8 // Maximum forward feed time, s
+#define MAX_FW_TIME 5 // Maximum forward feed time, s
 #define MIN_FW_TIME 0 // Minimum forward feed time, s
-#define INC_FW_TIME 0.1 // Increment forward feed time, s
+#define INC_FW_TIME 0.5 // Increment forward feed time, s
 
-#define MAX_BW_TIME 8 // Maximum backward feed time, s
+#define MAX_BW_TIME 5 // Maximum backward feed time, s
 #define MIN_BW_TIME 0 // Minimum backward feed time, s
-#define INC_BW_TIME 0.1 // Increment backward feed time, s
+#define INC_BW_TIME 0.5 // Increment backward feed time, s
 
 #define MAX_PAUSE 1 // Maximum pause time, s
 #define MIN_PAUSE 0 // Minimum pause time, s
@@ -59,7 +62,7 @@ const int EncPinB = 3; // Encoder channel B interrupt pin
 const int buttonPinE = 4; // Encoder push button pin
 
 const int buttonPinS = 5; // Start button pin
-const int buttonPinP = 6; // Feed button pin
+const int buttonPinF = 6; // Feed button pin
 
 const int buttonPinA = 7; // Button A pin
 const int buttonPinB = 8; // Button B pin
@@ -74,9 +77,9 @@ const int stepperEnaPin = 13; // Stepper driver ENA pin
 
 // Define a stepper and the pins it will use
 //AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
-//AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
+AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
 
-AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
+//AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
 
 //==============================================================================
 // Define an LCD screen
@@ -87,11 +90,24 @@ const int colorR = 100;
 const int colorG = 100;
 const int colorB = 0;
 
+#define LCD_COL_NUM 16
+#define LCD_ROW_NUM 2
+
+//==============================================================================
+// Define parameters names to fit a screen
+char c_par_lin_speed[LCD_COL_NUM]  = "   Line Speed  ";
+char c_par_mot_speed[LCD_COL_NUM]  = "   Step Speed  ";
+char c_par_fw_time[LCD_COL_NUM]    = "   Frwd Time   ";
+char c_par_bw_time[LCD_COL_NUM]    = "   Bkwd Time   ";
+char c_par_ps_time[LCD_COL_NUM]    = "   Pause Time  ";
+char c_par_ac_time[LCD_COL_NUM]    = "   Accel Time  ";
+char c_par_st_mode[LCD_COL_NUM]    = "   Start Mode  ";
 //==============================================================================
 
 // State of system
+#define ST_ONACT 0 // Motor running in actions
 #define ST_SELECT 1 // Modes/parameters selection
-#define ST_ONRUN 0 // Motor running
+#define ST_ONFEED 2 // Motor running for merely feed
 
 // Types of modes (can be added more combinations)
 /*
@@ -144,7 +160,7 @@ typedef struct params
   int max;
   int min;
   byte id;
-  char name[8];
+  char name[LCD_COL_NUM];
 } Param;
 #define NUM_PARAM 6
 #define MAGIC_NUMBER 74
@@ -271,7 +287,7 @@ float _MotorAccelTime; //motor acceleration/decceleration, sec
 
 
 // Global flags
-bool _state = ST_SELECT;
+byte _state = ST_SELECT;
 bool _update_display = true;
 bool reset_timer = true;
 bool _is_newaction = true;
@@ -289,8 +305,10 @@ const byte MAX_ENC_POS = 255; // as the encoderPos type is byte
 // Button reading, including debounce without delay function declarations
 byte _buttonOldState_E = HIGH;  // assume switch open because of pull-up resistor
 byte _buttonOldState_S = HIGH;  // assume switch open because of pull-up resistor
+byte _buttonOldState_F = HIGH;  // assume switch open because of pull-up resistor
 unsigned long _buttonPressTime_E;  // when the switch last changed state
 unsigned long _buttonPressTime_S;  // when the switch last changed state
+unsigned long _buttonPressTime_F;  // when the switch last changed state
 boolean _buttonPressed_E = 0; // global condition of switch
 const unsigned long debounceTime = 10;  // milliseconds
 
@@ -346,6 +364,8 @@ void EncPinB_ISR() {
 }
 
 
+
+
 void setup()
 {
   Serial.begin(9600);
@@ -364,7 +384,7 @@ void setup()
   pinMode(buttonPinC, INPUT_PULLUP);
   pinMode(buttonPinD, INPUT_PULLUP);
   pinMode(buttonPinS, INPUT_PULLUP);
-  pinMode(buttonPinP, INPUT_PULLUP);
+  pinMode(buttonPinF, INPUT_PULLUP);
   //=================================
   pinMode(stepperDirPin, OUTPUT);
   pinMode(stepperStepPin, OUTPUT);
@@ -395,14 +415,14 @@ void setup()
   if(state == LOW || number != MAGIC_NUMBER)
   {
   #ifdef LIN_SPEED
-    strcpy( param[par_speed].name, "Speed");
+    strcpy( param[par_speed].name, c_par_lin_speed);
     param[par_speed].id = par_speed;
     param[par_speed].value = MAX_LIN_SPEED;
     param[par_speed].min = MIN_LIN_SPEED;
     param[par_speed].max = MAX_LIN_SPEED;
     param[par_speed].inc = INC_LIN_SPEED;
   #else
-    strcpy( param[par_speed].name, "Speed");
+    strcpy( param[par_speed].name, c_par_mot_speed);
     param[par_speed].id = par_speed;
     param[par_speed].value = MAX_MOTOR_SPEED;
     param[par_speed].min = MIN_MOTOR_SPEED;
@@ -410,35 +430,35 @@ void setup()
     param[par_speed].inc = INC_MOTOR_SPEED;
   #endif //LIN_SPEED
   
-    strcpy( param[par_fwtime].name, "FW time");
+    strcpy( param[par_fwtime].name, c_par_fw_time);
     param[par_fwtime].id = par_fwtime;
     param[par_fwtime].value = (float)fw_feed.time_period / 1000;
     param[par_fwtime].max = MAX_FW_TIME;
     param[par_fwtime].min = MIN_FW_TIME;
     param[par_fwtime].inc = INC_FW_TIME;
   
-    strcpy( param[par_pause].name, "Pause");
+    strcpy( param[par_pause].name, c_par_ps_time);
     param[par_pause].id = par_pause;
     param[par_pause].value = (float)ps_feed.time_period / 1000;
     param[par_pause].max = MAX_PAUSE;
     param[par_pause].min = MIN_PAUSE;
     param[par_pause].inc = INC_PAUSE;
   
-    strcpy( param[par_bwtime].name, "BW time");
+    strcpy( param[par_bwtime].name, c_par_bw_time);
     param[par_bwtime].id = par_bwtime;
     param[par_bwtime].value = (float)bw_feed.time_period / 1000;
     param[par_bwtime].max = MAX_BW_TIME;
     param[par_bwtime].min = MIN_BW_TIME;
     param[par_bwtime].inc = INC_BW_TIME;
   
-    strcpy( param[par_accel].name, "Accel");
+    strcpy( param[par_accel].name, c_par_ac_time);
     param[par_accel].id = par_accel;
     param[par_accel].value = MIN_ACCEL_TIME;
     param[par_accel].max = MAX_ACCEL_TIME;
     param[par_accel].min = MIN_ACCEL_TIME;
     param[par_accel].inc = INC_ACCEL_TIME;
   
-    strcpy( param[par_stmode].name, "Mode");
+    strcpy( param[par_stmode].name, c_par_st_mode);
     param[par_stmode].value = MIN_RUN_MODE; // First mode
     param[par_stmode].id = par_stmode;
     param[par_stmode].min = MIN_RUN_MODE;
@@ -516,13 +536,18 @@ void UpdateStartSettings()
 void MotorTest()
 {
   //Serial.println(_MotorSpeed);
-  if (_state == ST_ONRUN)
+  if (_state == ST_ONACT)
     stepper.runSpeed();
+}
+void Run_Motor()
+{
+  if (_state == ST_ONFEED)
+    stepper.run();
 }
 
 void Run_Modes()
 {
-  if (_state == ST_ONRUN)
+  if (_state == ST_ONACT)
   {
     // Get the ongoing action from the current mode
     Action* ac = g_mode.GetAction();
@@ -581,34 +606,44 @@ void Display()
     lcd.clear();
     _update_display = false;
 
-    if (_state == ST_ONRUN)
+    if (_state == ST_ONACT)
     { // Display Speed
 
       lcd.setCursor(0, 0);
-      lcd.print("Speed: ");
-      lcd.setCursor(8, 0);
-      lcd.print(param[par_speed].value);
+      lcd.print(param[_selected_param].name);
+      lcd.setCursor(6, 1);
+      lcd.print(param[_selected_param].value);
     }
-    else
+    else if (_state == ST_SELECT)
     {
       lcd.setCursor(0, 0);
       lcd.print(param[_selected_param].name);
-      if (_MenuLevel == MENU_TOP)
-        lcd.print("  ");
-      else
-        lcd.print("->");
+      
+      if (_MenuLevel == MENU_BOT)
+      {
+        lcd.setCursor(0, 1);
+        lcd.print(">");
+        lcd.setCursor(LCD_COL_NUM - 1, 1);
+        lcd.print("<");
+      }
+      lcd.setCursor(6, 1);
       lcd.print(param[_selected_param].value);
+    }
+    else if (_state == ST_ONFEED)
+    {
+      lcd.setCursor(0, 0);
+      lcd.print("Loading...");
     }
   }
 }
 
-// Assumed to call in ST_ONRUN state
+// Assumed to call in ST_ONACT state
 void StopCycle()
 {
   // Stop motor with decceleration
   if( stepper.DeccelFromSpeed(_MotorAccelTime) )
   {
-    Serial.println("=====================");
+    Serial.println("==========Stop Cycle===========");
     /// Maybe need to check if the motor is in FW feed
     while (stepper.run())
       ;
@@ -622,13 +657,13 @@ void StopCycle()
 
 void ButtonS(bool buttonPressed)
 {
-  if (_state == ST_ONRUN)
+  if (_state == ST_ONACT)
   {
     switch (_start_mode)
     {
       case st_2T: 
         if (buttonPressed)
-          // It's strange that we are here - S button cannot be pressed again without exiting ST_ONRUN
+          // It's strange that we are here - S button cannot be pressed again without exiting ST_ONACT
           // But there is nothing to do, it's already running. Just sending a warning.
           Serial.println("We should not be here!!! Wrong button press");
         else { // Button released. It's a stop command
@@ -646,20 +681,44 @@ void ButtonS(bool buttonPressed)
         break;
     }
   }
-  else // _state == ST_SELECT
+  else if( _state == ST_SELECT )
   {
     if (buttonPressed)
     {
       UpdateStartSettings();
-      _state = ST_ONRUN; // Enable running
+      _state = ST_ONACT; // Enable running
       _update_display = true;
     }
   }
 }
 
-void ButtonP()
+void ButtonF(bool buttonPressed)
 {
-  Serial.println("Button P");
+  if (_state == ST_ONACT)
+    return;
+
+  if (buttonPressed)
+  {
+    if (_state == ST_ONFEED)
+      return; // It's strange, to be here.
+    float maxspeed = Lin2StepSpeed(MAX_FEED_SPEED); // MAX_FEED_SPEED 5.0    
+    float acceleration = abs(maxspeed) / (ACCEL_FEED_TIME); // ACCEL_FEED_TIME 1.0
+    stepper.setMaxSpeed(maxspeed);
+    stepper.setAcceleration(acceleration);
+    //Serial.print("Acceleration: ");
+    //Serial.println(acceleration);
+    stepper.move(1000000);
+    _state = ST_ONFEED;
+  }
+  else // button released
+  {
+    // Zero stepper parameters
+    stepper.setAcceleration(0);
+    stepper.setCurrentPosition(0);
+    // Should we do stop cycle here?
+    _state = ST_SELECT;
+  }
+   _update_display = true;
 }
 
 void ButtonA(bool postDelay)
@@ -743,20 +802,32 @@ void StartButtons()
       }
     }  // end if debounce time up
   } // end of state change
+
+  buttonState = digitalRead (buttonPinF);
+  if (buttonState != _buttonOldState_F) {
+    if (millis () - _buttonPressTime_F >= debounceTime) { // debounce
+      _buttonPressTime_F = millis ();  // when we closed the switch
+      _buttonOldState_F =  buttonState;  // remember for next time
+      if (buttonState == LOW) {
+        Serial.println ("button F closed"); // DEBUGGING: print that button has been closed
+        ButtonF(true);
+      }
+      else {
+        Serial.println ("button F opened"); // DEBUGGING: print that button has been opened
+        ButtonF(false);
+      }
+    }  // end if debounce time up
+  } // end of state change
 }
 
 
 // Isolate select buttons in case we change to substitute them with select encoder
 void SelectButtons()
 {
-  if (_state != ST_ONRUN)
+  if (_state != ST_ONACT)
   { // Handle all buttons
     byte pressed_button;
-/*    if (digitalRead(buttonPinS) == LOW)
-      pressed_button = bt_S;*/
-    if (digitalRead(buttonPinP) == LOW)
-      pressed_button = bt_P;
-    else if (digitalRead(buttonPinA) == LOW)
+    if (digitalRead(buttonPinA) == LOW)
       pressed_button = bt_A;
     else if (digitalRead(buttonPinB) == LOW)
       pressed_button = bt_B;
@@ -769,9 +840,6 @@ void SelectButtons()
 
     switch (pressed_button)
     {
-      case bt_P: // Load
-        ButtonP();
-        break;
       case bt_A: // Select-Up
         ButtonA(true);
         break;
@@ -787,10 +855,8 @@ void SelectButtons()
       default:
         break;
     }
-    if ((pressed_button == bt_A) || (pressed_button == bt_B) || (pressed_button == bt_C) || (pressed_button == bt_D))
-    {
+    if (pressed_button == bt_A || pressed_button == bt_B || pressed_button == bt_C || pressed_button == bt_D)
       UpdateGlobalSettings();
-    }
   }
 }
 
@@ -805,11 +871,11 @@ void RotaryMenu() { //This handles the bulk of the menu functions without needin
       _buttonPressTime_E = millis ();  // when we closed the switch
       _buttonOldState_E =  buttonState;  // remember for next time
       if (buttonState == LOW) {
-        Serial.println ("Button closed"); // DEBUGGING: print that button has been closed
+        Serial.println ("Button E closed"); // DEBUGGING: print that button has been closed
         _buttonPressed_E = 1;
       }
       else {
-        Serial.println ("Button opened"); // DEBUGGING: print that button has been opened
+        Serial.println ("Button E opened"); // DEBUGGING: print that button has been opened
         _buttonPressed_E = 0;
       }
     }  // end if debounce time up
@@ -869,5 +935,6 @@ void loop()
   StartButtons();
   RotaryMenu();
   //MotorTest();
+  Run_Motor();
   Run_Modes();
 }
