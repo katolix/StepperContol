@@ -1,6 +1,6 @@
 // Copyright (C) 2017 Vladimir Tsymbal
 // e-mail: vladimir.tsymbal@web.de
-// v.0.5
+// v.0.6
 // This software is furnished "as is", without technical support, and with no
 // warranty, express or implied, as to its usefulness for any purpose.
 //
@@ -15,13 +15,14 @@
 
 // User defined parameters
 //===================================================================================================//
-//#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
+#define LIN_SPEED 1 // vs. speed in steps if not defined (commented out)
 
 
 #define STEPS_PER_ROTATION 200 // Number of motor steps per one rotation
 #define PULLEY_DIA 30 // Diameter of pulley, mm
 
-#define MAX_FEED_SPEED 15.0 // Feed speed m/min
+#define MAX_FW_FEED_SPEED 7.5 // Feed speed m/min
+#define MAX_RW_FEED_SPEED 2.5 // Feed speed m/min
 #define ACCEL_FEED_TIME 1.0 // Accel feed time, s
 
 #ifdef LIN_SPEED
@@ -62,12 +63,13 @@ const int EncPinB = 3; // Encoder channel B interrupt pin
 const int buttonPinE = 4; // Encoder push button pin
 
 const int buttonPinS = 5; // Start button pin
-const int buttonPinF = 6; // Feed button pin
+const int buttonPinF = 6; // Forward Feed button pin
+const int buttonPinR = 7; // Reverse Feed button pin
 
-const int buttonPinA = 7; // Button A pin
-const int buttonPinB = 8; // Button B pin
-const int buttonPinC = 9; // Button C pin
-const int buttonPinD = 10; // Button D pin
+const int buttonPinA = 14; // Button A pin
+const int buttonPinB = 15; // Button B pin
+const int buttonPinC = 16; // Button C pin
+const int buttonPinD = 17; // Button D pin
 
 const int stepperDirPin = 11; // Stepper driver DIR pin
 const int stepperStepPin = 12; // Stepper driver STEP (PUL) pin
@@ -77,9 +79,9 @@ const int stepperEnaPin = 13; // Stepper driver ENA pin
 
 // Define a stepper and the pins it will use
 //AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 4, 3, 5); // Defaults to 4 pins on 2, 3, 4, 5
-AccelStepper stepper(AccelStepper::HALF4WIRE, 14, 16, 15, 17);
+//AccelStepper stepper(AccelStepper::HALF4WIRE, 31, 35, 33, 37);
 
-//AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
+AccelStepper stepper(AccelStepper::DRIVER, stepperStepPin, stepperDirPin);
 
 //==============================================================================
 // Define an LCD screen
@@ -306,9 +308,13 @@ const byte MAX_ENC_POS = 255; // as the encoderPos type is byte
 byte _buttonOldState_E = HIGH;  // assume switch open because of pull-up resistor
 byte _buttonOldState_S = HIGH;  // assume switch open because of pull-up resistor
 byte _buttonOldState_F = HIGH;  // assume switch open because of pull-up resistor
+byte _buttonOldState_R = HIGH;  // assume switch open because of pull-up resistor
+
 unsigned long _buttonPressTime_E;  // when the switch last changed state
 unsigned long _buttonPressTime_S;  // when the switch last changed state
 unsigned long _buttonPressTime_F;  // when the switch last changed state
+unsigned long _buttonPressTime_R;  // when the switch last changed state
+
 boolean _buttonPressed_E = 0; // global condition of switch
 const unsigned long debounceTime = 10;  // milliseconds
 
@@ -385,6 +391,7 @@ void setup()
   pinMode(buttonPinD, INPUT_PULLUP);
   pinMode(buttonPinS, INPUT_PULLUP);
   pinMode(buttonPinF, INPUT_PULLUP);
+  pinMode(buttonPinR, INPUT_PULLUP);
   //=================================
   pinMode(stepperDirPin, OUTPUT);
   pinMode(stepperStepPin, OUTPUT);
@@ -701,8 +708,8 @@ void ButtonF(bool buttonPressed)
   {
     if (_state == ST_ONFEED)
       return; // It's strange, to be here.
-    float maxspeed = Lin2StepSpeed(MAX_FEED_SPEED); // MAX_FEED_SPEED 5.0    
-    float acceleration = abs(maxspeed) / (ACCEL_FEED_TIME); // ACCEL_FEED_TIME 1.0
+    float maxspeed = Lin2StepSpeed(MAX_FW_FEED_SPEED);     
+    float acceleration = abs(maxspeed) / (ACCEL_FEED_TIME); 
     stepper.setMaxSpeed(maxspeed);
     stepper.setAcceleration(acceleration);
     //Serial.print("Acceleration: ");
@@ -716,10 +723,42 @@ void ButtonF(bool buttonPressed)
     stepper.setAcceleration(0);
     stepper.setCurrentPosition(0);
     // Should we do stop cycle here?
+    UpdateGlobalSettings(); // Return stepper params back
     _state = ST_SELECT;
   }
    _update_display = true;
 }
+
+void ButtonR(bool buttonPressed)
+{
+  if (_state == ST_ONACT)
+    return;
+
+  if (buttonPressed)
+  {
+    if (_state == ST_ONFEED)
+      return; // It's strange, to be here.
+    float maxspeed = Lin2StepSpeed(MAX_RW_FEED_SPEED);     
+    float acceleration = abs(maxspeed) / (ACCEL_FEED_TIME); 
+    stepper.setMaxSpeed(maxspeed);// CCW
+    stepper.setAcceleration(acceleration);
+    //Serial.print("Acceleration: ");
+    //Serial.println(acceleration);
+    stepper.move(-1000000);
+    _state = ST_ONFEED;
+  }
+  else // button released
+  {
+    // Zero stepper parameters
+    stepper.setAcceleration(0);
+    stepper.setCurrentPosition(0);
+    // Should we do stop cycle here?
+    UpdateGlobalSettings(); // Return stepper params back
+    _state = ST_SELECT;
+  }
+   _update_display = true;
+}
+
 
 void ButtonA(bool postDelay)
 {
@@ -818,6 +857,23 @@ void StartButtons()
       }
     }  // end if debounce time up
   } // end of state change
+
+  buttonState = digitalRead (buttonPinR);
+  if (buttonState != _buttonOldState_R) {
+    if (millis () - _buttonPressTime_R >= debounceTime) { // debounce
+      _buttonPressTime_R = millis ();  // when we closed the switch
+      _buttonOldState_R =  buttonState;  // remember for next time
+      if (buttonState == LOW) {
+        Serial.println ("button R closed"); // DEBUGGING: print that button has been closed
+        ButtonR(true);
+      }
+      else {
+        Serial.println ("button R opened"); // DEBUGGING: print that button has been opened
+        ButtonR(false);
+      }
+    }  // end if debounce time up
+  } // end of state change
+
 }
 
 
